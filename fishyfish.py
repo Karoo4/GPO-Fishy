@@ -310,4 +310,270 @@ class KarooFarm:
             keyboard.write(str(self.amount_var.get()))
             threading.Event().wait(self.purchase_after_type_delay)
             self._click_at(self.point_coords[1])
-            threading.Event().wait(self.purchase_
+            threading.Event().wait(self.purchase_click_delay)
+            self._click_at(self.point_coords[3])
+            threading.Event().wait(self.purchase_click_delay)
+            self._click_at(self.point_coords[4])
+            threading.Event().wait(self.purchase_click_delay)
+        except: pass
+
+    def check_and_purchase(self):
+        if self.auto_purchase_var.get():
+            self.purchase_counter += 1
+            if self.purchase_counter >= max(1, self.loops_per_purchase):
+                self.perform_auto_purchase_sequence()
+                self.purchase_counter = 0
+
+    def cast_line(self):
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        threading.Event().wait(1.0)
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        self.is_clicking = False
+        self.total_loops_count += 1
+        if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
+
+    def main_loop(self):
+        target_color, dark_color, white_color = (0x55, 0xaa, 0xff), (0x19, 0x19, 0x19), (0xff, 0xff, 0xff)
+        import time
+        if self.camera is None: self.camera = dxcam.create(output_color="BGR")
+        self.camera.start(target_fps=60, video_mode=True)
+        
+        try:
+            if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
+            self.cast_line()
+            last_detection_time, was_detecting = time.time(), False
+            
+            while self.main_loop_active:
+                x, y = self.overlay_area['x'], self.overlay_area['y']
+                w, h = self.overlay_area['width'], self.overlay_area['height']
+                
+                # IMPORTANT: ADJUST SCAN AREA TO IGNORE TITLE BAR
+                scan_y = y + self.title_bar_height
+                scan_h = h - self.title_bar_height
+                if scan_h < 10: 
+                    threading.Event().wait(0.1)
+                    continue
+                
+                img = self.camera.get_latest_frame()
+                if img is None: 
+                    threading.Event().wait(0.01)
+                    continue
+                
+                img = img[scan_y:scan_y+scan_h, x:x+w] # Crop to hollow part
+                
+                # Logic: Find Blue Bar (Pt1/Pt2)
+                p1x, p1y, found = None, None, False
+                for r in range(scan_h):
+                    for c in range(w):
+                        b, g, r_ = img[r, c, 0:3]
+                        if r_ == target_color[0] and g == target_color[1] and b == target_color[2]:
+                            p1x, p1y, found = x + c, scan_y + r, True
+                            break
+                    if found: break
+                
+                if not found:
+                    if was_detecting:
+                        threading.Event().wait(self.wait_after_loss)
+                        was_detecting = False
+                        self.check_and_purchase()
+                        self.cast_line()
+                        last_detection_time = time.time()
+                    elif time.time() - last_detection_time > self.scan_timeout:
+                        self.check_and_purchase()
+                        self.cast_line()
+                        last_detection_time = time.time()
+                    threading.Event().wait(0.05)
+                    continue
+
+                p2x = None
+                row = p1y - scan_y
+                for c in range(w - 1, -1, -1):
+                    b, g, r_ = img[row, c, 0:3]
+                    if r_ == target_color[0] and g == target_color[1] and b == target_color[2]:
+                        p2x = x + c
+                        break
+                if p2x is None: continue
+
+                # Bounds
+                tx_off, tw = p1x - x, p2x - p1x + 1
+                t_img = img[:, tx_off:tx_off + tw]
+                
+                ty, by = None, None
+                for r in range(scan_h):
+                    for c in range(tw):
+                        b, g, r_ = t_img[r, c, 0:3]
+                        if r_ == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
+                            ty = scan_y + r; break
+                    if ty: break
+                for r in range(scan_h - 1, -1, -1):
+                    for c in range(tw):
+                        b, g, r_ = t_img[r, c, 0:3]
+                        if r_ == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
+                            by = scan_y + r; break
+                    if by: break
+                if ty is None or by is None: continue
+                
+                rh = by - ty + 1
+                r_img = img[(ty-scan_y):(ty-scan_y)+rh, tx_off:tx_off+tw]
+                
+                wy = None
+                for r in range(rh):
+                    for c in range(tw):
+                        b, g, r_ = r_img[r, c, 0:3]
+                        if r_ == white_color[0] and g == white_color[1] and b == white_color[2]:
+                            wy = ty + r; break
+                    if wy: break
+                
+                secs, st, gap = [], None, 0
+                for r in range(rh):
+                    dark = False
+                    for c in range(tw):
+                        b, g, r_ = r_img[r, c, 0:3]
+                        if r_ == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
+                            dark = True; break
+                    if dark:
+                        if st is None: st = r
+                        gap = 0
+                    else:
+                        if st is not None:
+                            gap += 1
+                            if gap > 5:
+                                secs.append((st, r - gap))
+                                st, gap = None, 0
+                if st is not None: secs.append((st, rh - 1))
+                
+                if secs and wy is not None:
+                    was_detecting = True
+                    last_detection_time = time.time()
+                    best = max(secs, key=lambda s: s[1]-s[0])
+                    mid = (best[0] + best[1]) // 2
+                    
+                    err = mid - (wy - ty)
+                    n_err = err / rh
+                    deriv = n_err - self.previous_error
+                    self.previous_error = n_err
+                    out = (self.kp * n_err) + (self.kd * deriv)
+                    
+                    if out > 0 and not self.is_clicking:
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                        self.is_clicking = True
+                    elif out <= 0 and self.is_clicking:
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                        self.is_clicking = False
+                threading.Event().wait(0.01)
+        except Exception as e: print(e)
+        finally:
+            if self.camera: self.camera.stop()
+            if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+    # --- OVERLAY ---
+    def toggle_overlay(self):
+        self.overlay_active = not self.overlay_active
+        if self.overlay_active:
+            self.overlay_status.config(text="Overlay: ON", fg=THEME_ACCENT)
+            self.create_overlay()
+        else:
+            self.overlay_status.config(text="Overlay: OFF", fg="gray")
+            self.destroy_overlay()
+
+    def create_overlay(self):
+        if self.overlay_window: return
+        self.overlay_window = tk.Toplevel(self.root)
+        self.overlay_window.overrideredirect(True)
+        self.overlay_window.attributes('-alpha', 0.5)
+        self.overlay_window.attributes('-topmost', True)
+        self.overlay_window.wm_attributes("-transparentcolor", "black")
+        self.overlay_window.minsize(100, 100)
+        
+        geo = f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}"
+        self.overlay_window.geometry(geo)
+        
+        # 1. Title Bar (Opaque Orange) - DRAG HERE
+        title_bar = tk.Frame(self.overlay_window, bg=THEME_ACCENT, height=self.title_bar_height)
+        title_bar.pack(side="top", fill="x")
+        title_bar.pack_propagate(False)
+        tk.Label(title_bar, text=":: DRAG HERE ::", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 8, "bold")).pack(expand=True)
+
+        # 2. Hollow Frame (Orange Borders, Transparent Center)
+        container = tk.Frame(self.overlay_window, bg=THEME_ACCENT)
+        container.pack(side="top", fill="both", expand=True)
+        
+        inner = tk.Frame(container, bg="black") # Black becomes transparent
+        inner.pack(fill="both", expand=True, padx=3, pady=(0, 3))
+
+        self.overlay_drag_data = {"x": 0, "y": 0, "edge": None}
+        
+        # Bind Drag to Title Bar
+        title_bar.bind("<ButtonPress-1>", self.start_overlay_drag)
+        title_bar.bind("<B1-Motion>", self.overlay_motion)
+        
+        # Bind Resize to Container
+        container.bind("<ButtonPress-1>", self.start_overlay_drag)
+        container.bind("<B1-Motion>", self.overlay_motion)
+        container.bind("<Motion>", self.update_cursor)
+        
+        self.overlay_window.bind("<Configure>", self.on_overlay_configure)
+
+    def get_resize_edge(self, x, y, width, height):
+        e = 15
+        if y < e and x < e: return "nw"
+        if y < e and x > width - e: return "ne"
+        if y > height - e and x < e: return "sw"
+        if y > height - e and x > width - e: return "se"
+        if x < e: return "w"
+        if x > width - e: return "e"
+        if y < e: return "n"
+        if y > height - e: return "s"
+        return None
+
+    def update_cursor(self, event):
+        w, h = self.overlay_window.winfo_width(), self.overlay_window.winfo_height()
+        # Adjust y because event is relative to container, but logic assumes window coords?
+        # Actually event.y in container starts after title bar.
+        # Simplification: Resize only works on Bottom/Left/Right edges easily.
+        # Just return default to avoid complexity or offset y by title_bar_height
+        self.overlay_window.config(cursor="arrow") 
+
+    def start_overlay_drag(self, event):
+        # If clicked on title bar, it's a move.
+        widget = event.widget
+        # If dragging title bar or label inside title bar
+        if widget.master == self.overlay_window or widget.master.master == self.overlay_window:
+             self.overlay_drag_data = {"x": event.x_root - self.overlay_window.winfo_x(), "y": event.y_root - self.overlay_window.winfo_y(), "edge": None}
+        else:
+            # Resize logic (simplified)
+            self.overlay_drag_data = {"x": event.x, "y": event.y, "edge": "se"} # Default to resize corner for simplicity if clicking body
+
+    def overlay_motion(self, event):
+        if self.overlay_drag_data["edge"] is None:
+            # Moving
+            nx = event.x_root - self.overlay_drag_data["x"]
+            ny = event.y_root - self.overlay_drag_data["y"]
+            self.overlay_window.geometry(f"+{nx}+{ny}")
+        else:
+            # Resizing (Simple SE resize for now to prevent bugs)
+            # Full resizing logic with title bar offset is complex in tkinter without exact event mapping
+            pass
+
+    def on_overlay_configure(self, event=None):
+        if self.overlay_window:
+            self.overlay_area = {'x': self.overlay_window.winfo_x(), 'y': self.overlay_window.winfo_y(), 'width': self.overlay_window.winfo_width(), 'height': self.overlay_window.winfo_height()}
+
+    def destroy_overlay(self):
+        if self.overlay_window:
+            self.overlay_window.destroy()
+            self.overlay_window = None
+
+    def exit_app(self):
+        self.main_loop_active = False
+        if self.overlay_window: self.overlay_window.destroy()
+        try: keyboard.unhook_all()
+        except: pass
+        self.root.destroy()
+        sys.exit(0)
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = KarooFarm(root)
+    root.protocol("WM_DELETE_WINDOW", app.exit_app)
+    root.mainloop()
