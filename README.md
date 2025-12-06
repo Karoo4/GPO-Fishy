@@ -13,7 +13,7 @@ A simple auto-fishing bot for GPO.
 
 1.  Clone the repository:
     ```bash
-    git clone https://github.com/your-username/GPO-autofish.git
+    git clone https://github.com/Karoo4/GPO-Fishy.git
     ```
 2.  Install the dependencies:
     ```bash
