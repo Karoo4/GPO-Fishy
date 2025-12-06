@@ -3,7 +3,7 @@ packaging==25.0
 pyinstaller==6.17.0
 pyinstaller-hooks-contrib==2025.10
 setuptools==80.9.0
-keyboard
-pynput
-dxcam
-pywin32
+keyboard==0.13.5
+pynput==1.8.1
+dxcam==0.0.5
+pywin32==311
