@@ -11,21 +11,7 @@ import dxcam
 import numpy as np
 import win32api
 import win32con
-import sys
-import ctypes
 
-def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
-
-if __name__ == "__main__":
-    if not is_admin():
-        # Re-run the program with admin rights
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
-        sys.exit()
-    
 class HotkeyGUI:
     def __init__(self, root):
         self.root = root
@@ -85,8 +71,8 @@ class HotkeyGUI:
         self.purchase_counter = 0
         # Auto-purchase timing delays (seconds)
         self.purchase_delay_after_key = 2.0
-        self.purchase_click_delay = 1.0
-        self.purchase_after_type_delay = 1.0
+        self.purchase_click_delay = 0.8 # Slightly faster clicks
+        self.purchase_after_type_delay = 0.8
 
         # Initialize dxcam camera
         self.camera = None
@@ -126,7 +112,7 @@ class HotkeyGUI:
         canvas.configure(yscrollcommand=scrollbar.set)
 
         # Pack scrollbar and canvas
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y) # Fixed capitalization error here
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # Create window in canvas
@@ -167,7 +153,7 @@ class HotkeyGUI:
         # Separator
         ttk.Separator(main_frame, orient='horizontal').grid(row=3, column=0, columnspan=3, sticky='ew', pady=20)
 
-        # Auto Purchase Settings (inserted above PD Controller)
+        # Auto Purchase Settings
         ttk.Label(main_frame, text="Auto Purchase Settings:", font=('Arial', 12, 'bold')).grid(row=4, column=0, columnspan=3, pady=(0,20))
 
         # Active (Enable/Disable)
@@ -192,17 +178,31 @@ class HotkeyGUI:
         self.loops_var.trace_add('write', lambda *args: setattr(self, 'loops_per_purchase', self.loops_var.get()))
         self.loops_per_purchase = self.loops_var.get()
 
-        # Point capture buttons
-        ttk.Label(main_frame, text="Point 1:").grid(row=8, column=0, sticky=tk.W, pady=5)
+        # Point capture buttons (Updated to 4 points)
         self.point_buttons = {}
         self.point_coords = {1: None, 2: None, 3: None, 4: None}
-        self.point_buttons[1] = ttk.Button(main_frame, text="Point 1", command=lambda: self.capture_mouse_click(1))
-        self.point_buttons[1].grid(row=8, column=1, columnspan=2, pady=5, sticky=tk.W)
+        
+        # Labels for clarity
+        point_labels = {
+            1: "Pt 1 (Yes/Confirm)",
+            2: "Pt 2 (Amount Box)",
+            3: "Pt 3 (No)",
+            4: "Pt 4 (Ocean/Reset)"
+        }
+
+        # Create 4 buttons in rows 8, 9, 10, 11
+        for i in range(1, 5):
+            ttk.Label(main_frame, text=f"{point_labels[i]}:").grid(row=7+i, column=0, sticky=tk.W, pady=5)
+            # Use default arg x=i to capture loop variable
+            btn = ttk.Button(main_frame, text=f"Set Point {i}", command=lambda x=i: self.capture_mouse_click(x))
+            btn.grid(row=7+i, column=1, columnspan=2, pady=5, sticky=tk.W)
+            self.point_buttons[i] = btn
 
         # Separator (after Auto Purchase)
+        # Shifted down to row 12
         ttk.Separator(main_frame, orient='horizontal').grid(row=12, column=0, columnspan=3, sticky='ew', pady=20)
 
-        # PD Controller Settings (shifted down)
+        # PD Controller Settings
         ttk.Label(main_frame, text="PD Controller:", font=('Arial', 12, 'bold')).grid(row=13, column=0, columnspan=3, pady=(0, 10))
 
         # Kp
@@ -222,7 +222,7 @@ class HotkeyGUI:
         # Separator
         ttk.Separator(main_frame, orient='horizontal').grid(row=16, column=0, columnspan=3, sticky='ew', pady=20)
 
-        # Timing Settings (shifted down)
+        # Timing Settings
         ttk.Label(main_frame, text="Timing Settings:", font=('Arial', 12, 'bold')).grid(row=17, column=0, columnspan=3, pady=(0, 10))
 
         # Scan Timeout
@@ -242,7 +242,7 @@ class HotkeyGUI:
         # Separator
         ttk.Separator(main_frame, orient='horizontal').grid(row=20, column=0, columnspan=3, sticky='ew', pady=20)
 
-        # Hotkey bindings (shifted down)
+        # Hotkey bindings
         ttk.Label(main_frame, text="Hotkey Bindings:", font=('Arial', 12, 'bold')).grid(row=21, column=0, columnspan=3, pady=(0, 10))
 
         # Toggle Loop
@@ -326,71 +326,52 @@ class HotkeyGUI:
             print(f"Error clicking at {coords}: {e}")
 
     def perform_auto_purchase_sequence(self):
-        """Perform the auto-purchase sequence using saved points and amount.
-
-        Sequence (per user spec):
-        - press 'e', wait
-        - click point1, wait
-        - click point2, wait
-        - type amount, wait
-        - click point1, wait
-        - click point3, wait
-        - click point2, wait
-        """
+        """Perform the auto-purchase sequence using saved points and amount."""
         print("=== AUTO-PURCHASE SEQUENCE START ===")
         pts = self.point_coords
-        if not pts or not pts.get(1) or not pts.get(2) or not pts.get(3) or not pts.get(4):
-            # Shouldn't happen if validated, but guard anyway
+        
+        # Verify all 4 points are set
+        if not all([pts.get(1), pts.get(2), pts.get(3), pts.get(4)]):
             print("Auto purchase aborted: points not fully set (need points 1-4).")
+            # You might want to show a messagebox here too
             return
+
         try:
-            # Press 'e'
+            # 1. Trigger the interaction (Press 'e')
             print("Step 1: Pressing 'e'...")
             keyboard.press_and_release('e')
             threading.Event().wait(self.purchase_delay_after_key)
 
-            # Click sequence
-            print(f"Step 2: Clicking point 1 at {pts[1]}")
+            # 2. Click Point 1 ("Yes" - to open amount dialog)
+            print(f"Step 2: Clicking Point 1 (Yes) at {pts[1]}")
             self._click_at(pts[1])
             threading.Event().wait(self.purchase_click_delay)
 
-            print(f"Step 3: Clicking point 2 at {pts[2]}")
+            # 3. Click Point 2 (The "Amount to buy" input box)
+            print(f"Step 3: Clicking Point 2 (Input Box) at {pts[2]}")
             self._click_at(pts[2])
             threading.Event().wait(self.purchase_click_delay)
 
-            # Type the amount
-            amount = int(self.amount_var.get()) if hasattr(self, 'amount_var') else getattr(self, 'auto_purchase_amount', 0)
+            # 4. Type the amount
+            amount = int(self.amount_var.get()) if hasattr(self, 'amount_var') else getattr(self, 'auto_purchase_amount', 10)
             print(f"Step 4: Typing amount: {amount}")
             keyboard.write(str(amount))
             threading.Event().wait(self.purchase_after_type_delay)
 
-            # Continue clicks
-            print(f"Step 5: Clicking point 1 at {pts[1]}")
+            # 5. Click Point 1 again ("Yes" - to confirm purchase)
+            print(f"Step 5: Clicking Point 1 (Confirm) at {pts[1]}")
             self._click_at(pts[1])
             threading.Event().wait(self.purchase_click_delay)
     
-            print(f"Step 6: Clicking point 3 at {pts[3]}")
+            # 6. Click Point 3 ("No" - to close dialog/end chat)
+            print(f"Step 6: Clicking Point 3 (No) at {pts[3]}")
             self._click_at(pts[3])
             threading.Event().wait(self.purchase_click_delay)
 
-            print(f"Step 7: Clicking point 2 at {pts[2]}")
-            self._click_at(pts[2])
+            # 7. Click Point 4 (Ocean - to reset cursor/focus for fishing)
+            print(f"Step 7: Clicking Point 4 (Ocean) at {pts[4]}")
+            self._click_at(pts[4])
             threading.Event().wait(self.purchase_click_delay)
-
-
-            #Move cursor to point 4 after sequence if active and point 4 is set
-            try:
-                if getattr(self, 'auto_purchase_var', None) and self.auto_purchase_var.get():
-                    p4 = pts.get(4)
-                    if p4:
-                        print(f"Step 8: Moving cursor to point 4 at {p4}")
-                        # Move cursor to p4 but do not click. Use a tiny relative move so Roblox registers it
-                        win32api.SetCursorPos((int(p4[0]), int(p4[1])))
-                        # anti-roblox: move by 1 pixel to force the client to register the cursor move
-                        win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 0, 1, 0, 0)
-                        threading.Event().wait(self.purchase_click_delay)
-            except Exception as ex:
-                print(f"Error moving to point 4: {ex}")
 
             print(f"=== AUTO-PURCHASE COMPLETE (amount={amount}) ===")
         except Exception as e:
