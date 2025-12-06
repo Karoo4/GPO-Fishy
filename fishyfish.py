@@ -758,11 +758,11 @@ class KarooFarm:
         self.overlay_window.geometry(geo)
         
         # Frame with Orange Border
-        frame = tk.Frame(self.overlay_window, bg=THEME_ACCENT, highlightthickness=3, highlightbackground=THEME_ACCENT)
+        frame = tk.Frame(self.overlay_window, bg="black-", highlightthickness=3, highlightbackground="black")
         frame.pack(fill="both", expand=True)
         # Inner transparent-ish part (using a specific color key isn't easy in tkinter without full transparency)
         # We'll just make the inside hollow-ish by setting a different color and hoping alpha handles it
-        inner = tk.Frame(frame, bg="black")
+        inner = tk.Frame(frame, bg=THEME_ACCENT)
         inner.pack(fill="both", expand=True, padx=3, pady=3)
 
         self.overlay_drag_data = {"x": 0, "y": 0, "edge": None}
