@@ -126,7 +126,7 @@ class HotkeyGUI:
         canvas.configure(yscrollcommand=scrollbar.set)
 
         # Pack scrollbar and canvas
-        scrollbar.pack(side=tk.RIGHT, fill=tk.y)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # Create window in canvas
