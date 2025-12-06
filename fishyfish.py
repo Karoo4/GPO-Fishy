@@ -270,11 +270,10 @@ class KarooFarm:
         setattr(self, f"lbl_{key_key}", lbl)
         setattr(self, f"btn_{key_key}", btn)
 
-    # --- KEYBOARD FIX: USING ROOT.AFTER ---
     def register_hotkeys(self):
         try:
             keyboard.unhook_all()
-            # Wrap in root.after to ensure it runs on Main Thread
+            # USE ROOT.AFTER TO PREVENT CRASHES FROM THREADING
             keyboard.add_hotkey(self.hotkeys['toggle_loop'], lambda: self.root.after(0, self.toggle_main_loop))
             keyboard.add_hotkey(self.hotkeys['toggle_overlay'], lambda: self.root.after(0, self.toggle_overlay))
             keyboard.add_hotkey(self.hotkeys['toggle_afk'], lambda: self.root.after(0, self.toggle_afk_mode))
@@ -568,16 +567,21 @@ class KarooFarm:
         self.overlay_window.overrideredirect(True)
         self.overlay_window.attributes('-alpha', 0.5)
         self.overlay_window.attributes('-topmost', True)
+        
+        # KEY FIX: MAKE THE INSIDE TRANSPARENT SO THE CAMERA SEES THE GAME
+        self.overlay_window.wm_attributes("-transparentcolor", "black")
+        
         self.overlay_window.minsize(50, 50)
         
         geo = f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}"
         self.overlay_window.geometry(geo)
         
-        # COLOR SWAP HERE: Outer=Black, Inner=Orange
-        frame = tk.Frame(self.overlay_window, bg="black", highlightthickness=3, highlightbackground="black")
+        # Border = Orange (THEME_ACCENT), Center = Black (which becomes Transparent)
+        frame = tk.Frame(self.overlay_window, bg=THEME_ACCENT)
         frame.pack(fill="both", expand=True)
-        inner = tk.Frame(frame, bg=THEME_ACCENT)
-        inner.pack(fill="both", expand=True, padx=3, pady=3)
+        
+        inner = tk.Frame(frame, bg="black")
+        inner.pack(fill="both", expand=True, padx=3, pady=3) # The thickness of the border
 
         self.overlay_drag_data = {"x": 0, "y": 0, "edge": None}
         for w in [self.overlay_window, frame, inner]:
