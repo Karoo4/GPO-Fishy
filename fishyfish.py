@@ -78,9 +78,6 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # INCREASED DELAY: Waits longer for bobber to stop moving
-        self.cast_settle_delay = 3.5 
-        
         # --- DELAYS ---
         self.purchase_delay_after_key = 2.0   
         self.purchase_click_delay = 0.8       
@@ -423,171 +420,248 @@ class KarooFarm:
             print(f"Store Error: {e}")
             keyboard.press_and_release('2')
 
+    def cast(self):
+        # Cast uses a long hold (1.0s)
+        self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
+        self.is_clicking = False
+        self.total_loops_count += 1
+        if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
+        
+        # Original logic didn't have a big sleep, but to stop the "instant click" issue
+        # we reset the previous error and give it a tiny moment to settle.
+        self.previous_error = 0
+        time.sleep(0.5)
+
     def run_loop(self):
-        if self.camera is None: self.camera = dxcam.create(output_color="BGR")
+        """
+        Original 'main_loop' logic adapted for the new class.
+        This uses the stricter detection method (Left Blue -> Right Blue -> Dark Background)
+        which prevents it from seeing water as the bar.
+        """
+        print("Main Loop started (Original Logic)")
+        
+        target_color = (0x55, 0xaa, 0xff)  # RGB
+        dark_color = (0x19, 0x19, 0x19)
+        white_color = (0xff, 0xff, 0xff)
+
+        if self.camera is None:
+            self.camera = dxcam.create(output_color="BGR")
         self.camera.start(target_fps=60, video_mode=True)
+
         try:
-            if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
-            self.click(self.point_coords[4], "Pt 4 (Start)")
+            # Initial Purchase Check
+            if self.auto_purchase_var.get():
+                self.perform_auto_purchase_sequence()
+
+            # Initial Cast
             self.cast()
             
-            last_det = time.time()
-            detecting = False
-            
+            last_detection_time = time.time()
+            was_detecting = False
+
             while self.main_loop_active:
-                ox, oy = self.overlay_area['x'], self.overlay_area['y']
-                ow, oh = self.overlay_area['width'], self.overlay_area['height']
-                
-                scan_x, scan_y, scan_w, scan_h = ox, oy, ow, oh
-                
-                if scan_w < 10 or scan_h < 10: time.sleep(0.1); continue
-                
+                # Use current overlay area
+                x = self.overlay_area['x']
+                y = self.overlay_area['y']
+                width = self.overlay_area['width']
+                height = self.overlay_area['height']
+
                 img = self.camera.get_latest_frame()
-                if img is None: time.sleep(0.01); continue
+                if img is None:
+                    time.sleep(0.01)
+                    continue
+
+                # Crop to region
+                img = img[y:y+height, x:x+width]
+
+                # 1. Find Point 1 (Left Blue Edge)
+                point1_x = None
+                point1_y = None
+                found_first = False
                 
-                img = img[scan_y:scan_y+scan_h, scan_x:scan_x+scan_w]
-                target = (0x55, 0xaa, 0xff)
-                
-                p1x, p1y, found = None, None, False
-                for r in range(scan_h):
-                    for c in range(scan_w):
-                        b,g,r_ = img[r,c]
-                        if r_==target[0] and g==target[1] and b==target[2]:
-                            p1x, p1y, found = c, r, True; break
-                    if found: break
-                
-                if not found:
-                    if detecting:
-                        # Minigame finished or lost
-                        print("Minigame End. Resetting.")
+                # Scan left-to-right
+                for row_idx in range(height):
+                    for col_idx in range(width):
+                        b, g, r = img[row_idx, col_idx, 0:3]
+                        if r == target_color[0] and g == target_color[1] and b == target_color[2]:
+                            point1_x = x + col_idx
+                            point1_y = y + row_idx
+                            found_first = True
+                            break
+                    if found_first: break
+
+                if not found_first:
+                    # Logic for when bar is NOT found (Timeout or Fishing Done)
+                    current_time = time.time()
+                    
+                    if was_detecting:
+                        # Just finished a game
+                        print("Lost detection (Game Over). Waiting...")
                         time.sleep(self.wait_after_loss)
-                        detecting = False
-                        
-                        # FORCE MOUSE UP SAFETY
+                        was_detecting = False
                         self.is_clicking = False
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         
+                        # Check Auto Buy/Store
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
                                 self.perform_auto_purchase_sequence()
                                 self.purchase_counter = 0
                         
-                        if self.item_check_var.get(): 
+                        if self.item_check_var.get():
                             self.perform_store_fruit()
                             
-                        self.cast(); last_det = time.time()
-                    
-                    elif time.time() - last_det > self.timeout_var.get():
+                        self.cast()
+                        last_detection_time = time.time()
+                        
+                    elif current_time - last_detection_time > self.timeout_var.get():
                         # Timeout
-                        print("Timeout. Recasting.")
-                        if self.item_check_var.get(): self.perform_store_fruit()
-                        self.cast(); last_det = time.time()
-                    time.sleep(0.05); continue
-                
-                detecting = True; last_det = time.time()
-                
-                p2x = None
-                for c in range(scan_w-1, -1, -1):
-                    b,g,r_ = img[p1y, c]
-                    if r_==target[0] and g==target[1] and b==target[2]:
-                        p2x = c; break
-                
-                # --- CRITICAL FIX: WIDTH CHECK ---
-                # If the blue thing is too narrow (e.g., less than 40px), 
-                # it's probably water reflection, not the minigame bar.
-                if not p2x or (p2x - p1x) < 40: 
+                        print("Timeout. Recasting...")
+                        
+                        # Check Auto Store (Safety check)
+                        if self.item_check_var.get():
+                            self.perform_store_fruit()
+                            
+                        self.cast()
+                        last_detection_time = time.time()
+                    
+                    time.sleep(0.1)
                     continue
+
+                # 2. Find Point 2 (Right Blue Edge)
+                point2_x = None
+                row_idx = point1_y - y
+                for col_idx in range(width - 1, -1, -1):
+                    b, g, r = img[row_idx, col_idx, 0:3]
+                    if r == target_color[0] and g == target_color[1] and b == target_color[2]:
+                        point2_x = x + col_idx
+                        break
                 
-                bar = img[:, p1x:p2x+1]
-                bh, bw = bar.shape[0], bar.shape[1]
+                if point2_x is None:
+                    time.sleep(0.1)
+                    continue
+
+                # 3. Define Real Area based on DARK Background (#191919)
+                # This is the critical step the new code missed. It filters out water.
+                temp_area_x = point1_x
+                temp_area_width = point2_x - point1_x + 1
+                temp_x_offset = temp_area_x - x
+                temp_img = img[:, temp_x_offset:temp_x_offset + temp_area_width]
+
+                top_y = None
+                for r_idx in range(height):
+                    found_dark = False
+                    for c_idx in range(temp_area_width):
+                        b, g, r = temp_img[r_idx, c_idx, 0:3]
+                        if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
+                            top_y = y + r_idx
+                            found_dark = True
+                            break
+                    if found_dark: break
                 
-                dark = (0x19, 0x19, 0x19)
-                ty, by = None, None
-                for r in range(bh):
-                    for c in range(bw):
-                        b,g,r_ = bar[r,c]
-                        if r_==dark[0] and g==dark[1] and b==dark[2]: ty=r; break
-                    if ty: break
-                for r in range(bh-1, -1, -1):
-                    for c in range(bw):
-                        b,g,r_ = bar[r,c]
-                        if r_==dark[0] and g==dark[1] and b==dark[2]: by=r; break
-                    if by: break
-                if not ty or not by: continue
+                bottom_y = None
+                for r_idx in range(height - 1, -1, -1):
+                    found_dark = False
+                    for c_idx in range(temp_area_width):
+                        b, g, r = temp_img[r_idx, c_idx, 0:3]
+                        if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
+                            bottom_y = y + r_idx
+                            found_dark = True
+                            break
+                    if found_dark: break
+
+                if top_y is None or bottom_y is None:
+                    time.sleep(0.1)
+                    continue
+
+                # 4. We found the bar! Scan for White Target inside the dark area
+                real_height = bottom_y - top_y + 1
+                real_x_offset = temp_x_offset
+                real_y_offset = top_y - y
                 
-                real = bar[ty:by+1, :]
-                rh = real.shape[0]
+                real_img = img[real_y_offset:real_y_offset+real_height, real_x_offset:real_x_offset+temp_area_width]
                 
-                white = (0xff, 0xff, 0xff)
-                wy = None
-                for r in range(rh):
-                    for c in range(bw):
-                        b,g,r_ = real[r,c]
-                        if r_==white[0] and g==white[1] and b==white[2]: wy=r; break
-                    if wy: break
-                
-                gaps = []
-                st, gc = None, 0
-                for r in range(rh):
-                    is_d = False
-                    for c in range(bw):
-                        b,g,r_ = real[r,c]
-                        if r_==dark[0] and g==dark[1] and b==dark[2]: is_d=True; break
-                    if is_d:
-                        if st is None: st = r
-                        gc = 0
+                white_top_y = None
+                for r_idx in range(real_height):
+                    for c_idx in range(temp_area_width):
+                        b, g, r = real_img[r_idx, c_idx, 0:3]
+                        if r == white_color[0] and g == white_color[1] and b == white_color[2]:
+                            white_top_y = top_y + r_idx
+                            break
+                    if white_top_y is not None: break
+
+                # 5. Find the Slider (Dark gaps in the bar)
+                dark_sections = []
+                current_section_start = None
+                gap_counter = 0
+                max_gap = (real_height * 0.2) if white_top_y else 3 # Approx estimate
+
+                for r_idx in range(real_height):
+                    has_dark = False
+                    for c_idx in range(temp_area_width):
+                        b, g, r = real_img[r_idx, c_idx, 0:3]
+                        if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
+                            has_dark = True
+                            break
+                    
+                    if has_dark:
+                        gap_counter = 0
+                        if current_section_start is None:
+                            current_section_start = top_y + r_idx
                     else:
-                        if st is not None:
-                            gc += 1
-                            if gc > 5:
-                                gaps.append((st, r-gc))
-                                st, gc = None, 0
-                if st: gaps.append((st, rh-1))
+                        if current_section_start is not None:
+                            gap_counter += 1
+                            if gap_counter > max_gap:
+                                section_end = top_y + r_idx - gap_counter
+                                dark_sections.append({
+                                    'middle': (current_section_start + section_end) // 2,
+                                    'size': section_end - current_section_start
+                                })
+                                current_section_start = None
+                                gap_counter = 0
                 
-                if gaps and wy is not None:
-                    best = max(gaps, key=lambda x: x[1]-x[0])
-                    mid = (best[0] + best[1]) // 2
+                if current_section_start is not None:
+                    section_end = top_y + real_height - 1 - gap_counter
+                    dark_sections.append({
+                        'middle': (current_section_start + section_end) // 2,
+                        'size': section_end - current_section_start
+                    })
+
+                # 6. Logic Controller
+                if dark_sections and white_top_y is not None:
+                    was_detecting = True
+                    last_detection_time = time.time()
                     
-                    err = mid - wy
-                    n_err = err / rh
-                    deriv = n_err - self.previous_error
-                    self.previous_error = n_err
+                    largest_section = max(dark_sections, key=lambda s: s['size'])
                     
-                    out = (self.kp_var.get() * n_err) + (self.kd_var.get() * deriv)
+                    raw_error = largest_section['middle'] - white_top_y
+                    normalized_error = raw_error / real_height if real_height > 0 else raw_error
                     
-                    if out > 0 and not self.is_clicking:
-                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                        self.is_clicking = True
-                    elif out <= 0 and self.is_clicking:
-                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                        self.is_clicking = False
+                    derivative = normalized_error - self.previous_error
+                    self.previous_error = normalized_error
+                    
+                    # Use current GUI values for Kp and Kd
+                    pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
+                    
+                    if pd_output > 0:
+                        if not self.is_clicking:
+                            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                            self.is_clicking = True
+                    else:
+                        if self.is_clicking:
+                            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                            self.is_clicking = False
                 
                 time.sleep(0.01)
 
-        except Exception as e: print(e)
+        except Exception as e:
+            print(f"Error in run_loop: {e}")
         finally:
             self.camera.stop()
-            if self.is_clicking: 
+            if self.is_clicking:
                 win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                 self.is_clicking = False
-
-    def cast(self):
-        # Cast uses a long hold (1.0s)
-        self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
-        
-        # 1. Reset Click Status
-        self.is_clicking = False
-        
-        # 2. Reset PD Controller to prevent erratic movement on start
-        self.previous_error = 0
-        
-        self.total_loops_count += 1
-        if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
-        
-        # 3. Wait for bobber to settle so we don't scan the ocean splash
-        print("Waiting for bobber to settle...")
-        time.sleep(self.cast_settle_delay)
 
     # --- OVERLAY ---
     def toggle_overlay(self):
