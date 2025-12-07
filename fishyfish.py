@@ -77,7 +77,9 @@ class KarooFarm:
         self.previous_error = 0
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
-        self.cast_settle_delay = 2.5 # Time to wait for bobber to settle
+        
+        # INCREASED DELAY: Waits longer for bobber to stop moving
+        self.cast_settle_delay = 3.5 
         
         # --- DELAYS ---
         self.purchase_delay_after_key = 2.0   
@@ -436,11 +438,7 @@ class KarooFarm:
                 ox, oy = self.overlay_area['x'], self.overlay_area['y']
                 ow, oh = self.overlay_area['width'], self.overlay_area['height']
                 
-                # NO OFFSET: Scan exactly where the box is
-                scan_x = ox
-                scan_y = oy
-                scan_w = ow
-                scan_h = oh
+                scan_x, scan_y, scan_w, scan_h = ox, oy, ow, oh
                 
                 if scan_w < 10 or scan_h < 10: time.sleep(0.1); continue
                 
@@ -461,6 +459,7 @@ class KarooFarm:
                 if not found:
                     if detecting:
                         # Minigame finished or lost
+                        print("Minigame End. Resetting.")
                         time.sleep(self.wait_after_loss)
                         detecting = False
                         
@@ -481,6 +480,7 @@ class KarooFarm:
                     
                     elif time.time() - last_det > self.timeout_var.get():
                         # Timeout
+                        print("Timeout. Recasting.")
                         if self.item_check_var.get(): self.perform_store_fruit()
                         self.cast(); last_det = time.time()
                     time.sleep(0.05); continue
@@ -492,7 +492,12 @@ class KarooFarm:
                     b,g,r_ = img[p1y, c]
                     if r_==target[0] and g==target[1] and b==target[2]:
                         p2x = c; break
-                if not p2x: continue
+                
+                # --- CRITICAL FIX: WIDTH CHECK ---
+                # If the blue thing is too narrow (e.g., less than 40px), 
+                # it's probably water reflection, not the minigame bar.
+                if not p2x or (p2x - p1x) < 40: 
+                    continue
                 
                 bar = img[:, p1x:p2x+1]
                 bh, bw = bar.shape[0], bar.shape[1]
