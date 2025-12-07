@@ -47,10 +47,6 @@ class KarooFarm:
         self.overlay_window = None
         self.is_clicking = False
         
-        # Overlay Dimensions & Logic
-        self.title_bar_height = 40  # Taller for easier dragging
-        self.border_thickness = 8   # Thicker borders for easier resizing
-        
         # Counters and Logic
         self.purchase_counter = 0     
         self.total_loops_count = 0    
@@ -381,7 +377,6 @@ class KarooFarm:
             self._click_at(p5)
             time.sleep(0.5)
             
-            # Simple assumption based on user request: always press backspace
             keyboard.press_and_release('backspace')
             time.sleep(0.3)
             keyboard.press_and_release('2')
@@ -402,40 +397,29 @@ class KarooFarm:
             last_detection_time, was_detecting = time.time(), False
             
             while self.main_loop_active:
+                # REVERTED LOGIC: Capture entire overlay area. 
+                # We do not exclude title bars in the CROP to keep logic simple.
+                # However, the user must position the overlay so the borders don't overlap the bar.
+                # Given the new thin borders, this is much easier.
+                
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 w, h = self.overlay_area['width'], self.overlay_area['height']
-                
-                # --- UPDATE: Ignore the thick borders in vision ---
-                border = self.border_thickness
-                title = self.title_bar_height
-                
-                # Crop region logic:
-                # X: Start at x + border, Width = w - (border*2)
-                # Y: Start at y + title, Height = h - title - border
-                
-                scan_x = x + border
-                scan_y = y + title
-                scan_w = w - (border * 2)
-                scan_h = h - title - border
-                
-                if scan_h < 10 or scan_w < 10: 
-                    time.sleep(0.1)
-                    continue
                 
                 img = self.camera.get_latest_frame()
                 if img is None: 
                     time.sleep(0.01)
                     continue
                 
-                img = img[scan_y : scan_y+scan_h, scan_x : scan_x+scan_w]
+                # Simple crop - works because border is thin (3px) and center is transparent
+                img = img[y : y+h, x : x+w]
                 
                 # 1. Pt 1
                 p1x, p1y, found = None, None, False
-                for r in range(scan_h):
-                    for c in range(scan_w):
+                for r in range(h):
+                    for c in range(w):
                         b, g, r_ = img[r, c, 0:3]
                         if r_ == target_color[0] and g == target_color[1] and b == target_color[2]:
-                            p1x, p1y, found = scan_x + c, r, True
+                            p1x, p1y, found = x + c, r, True
                             break
                     if found: break
                 
@@ -465,25 +449,25 @@ class KarooFarm:
                 # 2. Pt 2
                 p2x = None
                 row = p1y
-                for c in range(scan_w - 1, -1, -1):
+                for c in range(w - 1, -1, -1):
                     b, g, r_ = img[row, c, 0:3]
                     if r_ == target_color[0] and g == target_color[1] and b == target_color[2]:
-                        p2x = scan_x + c
+                        p2x = x + c
                         break
                 if p2x is None: continue
 
                 # 3. Bounds
-                tx_off, tw = p1x - scan_x, p2x - p1x + 1
+                tx_off, tw = p1x - x, p2x - p1x + 1
                 t_img = img[:, tx_off:tx_off + tw]
                 
                 ty, by = None, None
-                for r in range(scan_h):
+                for r in range(h):
                     for c in range(tw):
                         b, g, r_ = t_img[r, c, 0:3]
                         if r_ == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
                             ty = r; break
                     if ty: break
-                for r in range(scan_h - 1, -1, -1):
+                for r in range(h - 1, -1, -1):
                     for c in range(tw):
                         b, g, r_ = t_img[r, c, 0:3]
                         if r_ == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
@@ -568,106 +552,104 @@ class KarooFarm:
         if self.overlay_window: return
         self.overlay_window = tk.Toplevel(self.root)
         self.overlay_window.overrideredirect(True)
-        self.overlay_window.attributes('-alpha', 0.5)
+        self.overlay_window.attributes('-alpha', 0.8) # Slight alpha for the border logic
         self.overlay_window.attributes('-topmost', True)
         self.overlay_window.wm_attributes("-transparentcolor", "black")
-        self.overlay_window.minsize(120, 150)
+        self.overlay_window.minsize(100, 100)
         
         geo = f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}"
         self.overlay_window.geometry(geo)
         
-        # 1. Title Bar
-        title_bar = tk.Frame(self.overlay_window, bg=THEME_ACCENT, height=self.title_bar_height, cursor="fleur")
-        title_bar.pack(side="top", fill="x")
-        title_bar.pack_propagate(False)
-        tk.Label(title_bar, text=":: DRAG HERE ::", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 10, "bold")).pack(expand=True)
-
-        # 2. Body Frame (Orange with Black Center)
-        body = tk.Frame(self.overlay_window, bg=THEME_ACCENT)
-        body.pack(side="top", fill="both", expand=True)
+        # Structure: Outer Frame (Orange), Inner Frame (Black/Transparent)
+        # This creates the "Selection Box" look.
         
-        # This padx/pady creates the border thickness
-        inner = tk.Frame(body, bg="black")
-        inner.pack(fill="both", expand=True, padx=self.border_thickness, pady=(0, self.border_thickness))
-
-        # 3. Corner Grips (Visuals)
-        self.create_corner_grips(self.overlay_window)
-
-        # Events
-        self.overlay_drag_data = {"x": 0, "y": 0}
+        self.outer_frame = tk.Frame(self.overlay_window, bg=THEME_ACCENT, cursor="fleur")
+        self.outer_frame.pack(fill="both", expand=True)
         
-        title_bar.bind("<ButtonPress-1>", self.start_drag)
-        title_bar.bind("<B1-Motion>", self.do_drag)
+        self.inner_frame = tk.Frame(self.outer_frame, bg="black", cursor="fleur")
+        # 3px border
+        self.inner_frame.pack(fill="both", expand=True, padx=3, pady=3)
+
+        # Bind events to BOTH frames so you can drag from anywhere (since inner is transparent to eyes but captures clicks)
+        self.overlay_drag_data = {"x": 0, "y": 0, "mode": None}
         
-        self.overlay_window.bind("<Motion>", self.update_cursor)
-        self.overlay_window.bind("<ButtonPress-1>", self.start_resize_check)
-        self.overlay_window.bind("<B1-Motion>", self.do_resize_check)
+        for w in [self.overlay_window, self.outer_frame, self.inner_frame]:
+            w.bind("<ButtonPress-1>", self.on_press)
+            w.bind("<B1-Motion>", self.on_drag)
+            w.bind("<Motion>", self.update_cursor) # Hover to see resize arrows
+        
         self.overlay_window.bind("<Configure>", self.on_overlay_configure)
 
-    def create_corner_grips(self, parent):
-        # We don't actually bind these, we just place them visually. The resizing logic is coordinate based.
-        # But we make them black so they are transparent, effectively cutting corners? 
-        # No, let's make them White or darker Orange to be visible.
-        c = "white"
-        s = 10
-        # Placing relative to window
-        # Note: can't easily place over packed widgets without a canvas or place().
-        # We will rely on cursor changes, but add a small label in bottom right "Resize"
-        pass 
-
-    def start_drag(self, event):
-        self.overlay_drag_data = {"mode": "move", "x": event.x_root, "y": event.y_root, "win_x": self.overlay_window.winfo_x(), "win_y": self.overlay_window.winfo_y()}
-
-    def do_drag(self, event):
-        dx = event.x_root - self.overlay_drag_data["x"]
-        dy = event.y_root - self.overlay_drag_data["y"]
-        self.overlay_window.geometry(f"+{self.overlay_drag_data['win_x'] + dx}+{self.overlay_drag_data['win_y'] + dy}")
-
-    def get_edge(self, event):
-        w, h = self.overlay_window.winfo_width(), self.overlay_window.winfo_height()
-        x, y = event.x, event.y
-        m = 15 # Margin size
+    def get_edge(self, event_x, event_y, w, h):
+        m = 10 # Margin for resize
+        x, y = event_x, event_y
         
-        if x < m and y < m: return "nw"
-        if x > w-m and y < m: return "ne"
-        if x < m and y > h-m: return "sw"
-        if x > w-m and y > h-m: return "se"
-        if x < m: return "w"
-        if x > w-m: return "e"
-        if y < m: return "n"
-        if y > h-m: return "s"
-        return None
+        # Note: events in inner frame need offset adjustment? 
+        # Actually pynput gives relative. Tkinter events are relative to widget. 
+        # It's safest to use root coordinates if possible, or just simpler logic.
+        # Let's use simple logic: If mouse is near 0 or W/H.
+        
+        # Determine if we are on edge based on widget size
+        # Since we bind to inner and outer, 'w' and 'h' vary.
+        # Let's stick to simple "Dragging" for center, resizing for edges.
+        
+        edge = ""
+        if y < m: edge += "n"
+        elif y > h - m: edge += "s"
+        
+        if x < m: edge += "w"
+        elif x > w - m: edge += "e"
+        
+        return edge if edge else None
 
     def update_cursor(self, event):
-        edge = self.get_edge(event)
-        cursors = {"nw":"size_nw_se", "ne":"size_ne_sw", "sw":"size_ne_sw", "se":"size_nw_se", "n":"size_ns", "s":"size_ns", "w":"size_we", "e":"size_we"}
-        self.overlay_window.config(cursor=cursors.get(edge, "arrow"))
+        w = event.widget.winfo_width()
+        h = event.widget.winfo_height()
+        edge = self.get_edge(event.x, event.y, w, h)
+        
+        cursors = {
+            "n": "top_side", "s": "bottom_side", "w": "left_side", "e": "right_side",
+            "nw": "top_left_corner", "ne": "top_right_corner", 
+            "sw": "bottom_left_corner", "se": "bottom_right_corner"
+        }
+        self.overlay_window.config(cursor=cursors.get(edge, "fleur"))
 
-    def start_resize_check(self, event):
-        edge = self.get_edge(event)
-        if edge:
-            self.overlay_drag_data = {
-                "mode": "resize", "edge": edge, "x": event.x_root, "y": event.y_root,
-                "x_win": self.overlay_window.winfo_x(), "y_win": self.overlay_window.winfo_y(),
-                "w": self.overlay_window.winfo_width(), "h": self.overlay_window.winfo_height()
-            }
+    def on_press(self, event):
+        w = event.widget.winfo_width()
+        h = event.widget.winfo_height()
+        edge = self.get_edge(event.x, event.y, w, h)
+        
+        self.overlay_drag_data = {
+            "mode": "resize" if edge else "move",
+            "edge": edge,
+            "x_root": event.x_root,
+            "y_root": event.y_root,
+            "win_x": self.overlay_window.winfo_x(),
+            "win_y": self.overlay_window.winfo_y(),
+            "win_w": self.overlay_window.winfo_width(),
+            "win_h": self.overlay_window.winfo_height()
+        }
 
-    def do_resize_check(self, event):
-        if self.overlay_drag_data.get("mode") != "resize": return
-        edge = self.overlay_drag_data["edge"]
-        dx = event.x_root - self.overlay_drag_data["x"]
-        dy = event.y_root - self.overlay_drag_data["y"]
+    def on_drag(self, event):
+        data = self.overlay_drag_data
+        dx = event.x_root - data["x_root"]
+        dy = event.y_root - data["y_root"]
         
-        x, y, w, h = self.overlay_drag_data["x_win"], self.overlay_drag_data["y_win"], self.overlay_drag_data["w"], self.overlay_drag_data["h"]
+        if data["mode"] == "move":
+            self.overlay_window.geometry(f"+{data['win_x'] + dx}+{data['win_y'] + dy}")
         
-        if 'e' in edge: w += dx
-        if 'w' in edge: w -= dx; x += dx
-        if 's' in edge: h += dy
-        if 'n' in edge: h -= dy; y += dy
-        
-        w = max(100, w)
-        h = max(100, h)
-        self.overlay_window.geometry(f"{w}x{h}+{x}+{y}")
+        elif data["mode"] == "resize":
+            x, y, w, h = data["win_x"], data["win_y"], data["win_w"], data["win_h"]
+            edge = data["edge"]
+            
+            if 'e' in edge: w += dx
+            if 'w' in edge: w -= dx; x += dx
+            if 's' in edge: h += dy
+            if 'n' in edge: h -= dy; y += dy
+            
+            w = max(50, w)
+            h = max(50, h)
+            self.overlay_window.geometry(f"{w}x{h}+{x}+{y}")
 
     def on_overlay_configure(self, event=None):
         if self.overlay_window:
