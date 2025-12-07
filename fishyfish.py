@@ -13,6 +13,7 @@ import win32con
 from PIL import Image, ImageTk, ImageEnhance
 import requests
 from io import BytesIO
+import time
 
 # --- CONFIGURATION ---
 THEME_BG = "#0b0b0b"        # Deep Black
@@ -30,7 +31,7 @@ class KarooFarm:
     def __init__(self, root):
         self.root = root
         self.root.title("Karoo Farm")
-        self.root.geometry("450x750")
+        self.root.geometry("450x850") # Taller for new settings
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
 
@@ -46,6 +47,9 @@ class KarooFarm:
         self.overlay_window = None
         self.is_clicking = False
         
+        # Overlay Settings
+        self.title_bar_height = 30
+        
         # Counters and Logic
         self.purchase_counter = 0     
         self.total_loops_count = 0    
@@ -57,7 +61,9 @@ class KarooFarm:
         self.purchase_delay_after_key = 2.0
         self.purchase_click_delay = 0.8
         self.purchase_after_type_delay = 0.8
-        self.title_bar_height = 30  # Height of the orange drag bar
+        
+        # Item Check settings
+        self.check_items = True
 
         self.dpi_scale = self.get_dpi_scale()
 
@@ -73,8 +79,11 @@ class KarooFarm:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         self.camera = None
-        self.point_coords = {1: None, 2: None, 3: None, 4: None}
+        
+        # Points: 1=Yes, 2=Input, 3=No, 4=Ocean, 5=ItemCheck
+        self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None}
         self.point_buttons = {}
+        self.point_labels = {} 
 
         self.bg_main = self.load_processed_image(VIVI_URL, darkness=0.3)
         self.bg_afk = self.load_processed_image(DUCK_URL, darkness=0.4)
@@ -90,7 +99,7 @@ class KarooFarm:
         try:
             response = requests.get(url, timeout=5)
             img = Image.open(BytesIO(response.content))
-            img = img.resize((500, 800), Image.Resampling.LANCZOS)
+            img = img.resize((500, 900), Image.Resampling.LANCZOS)
             return ImageTk.PhotoImage(ImageEnhance.Brightness(img).enhance(darkness))
         except Exception: return None
 
@@ -121,6 +130,7 @@ class KarooFarm:
 
         tk.Label(self.inner_frame, text="Karoo Farm", font=FONT_TITLE, bg=THEME_BG, fg=THEME_ACCENT).pack(pady=(20, 10))
 
+        # Status
         self.status_frame = tk.Frame(self.inner_frame, bg=THEME_BG, highlightbackground=THEME_ACCENT, highlightthickness=1)
         self.status_frame.pack(fill="x", padx=20, pady=10)
         self.loop_status = tk.Label(self.status_frame, text="Main Loop: OFF", font=FONT_BOLD, bg=THEME_BG, fg="red")
@@ -128,59 +138,85 @@ class KarooFarm:
         self.overlay_status = tk.Label(self.status_frame, text="Overlay: OFF", font=FONT_MAIN, bg=THEME_BG, fg="gray")
         self.overlay_status.pack(pady=5)
 
-        self.create_section_label("Auto Purchase Settings")
+        # --- AUTO PURCHASE SECTION ---
+        self.create_section_label("Auto Purchase")
         buy_frame = tk.Frame(self.inner_frame, bg=THEME_BG)
         buy_frame.pack(fill="x", padx=20)
 
         self.auto_purchase_var = tk.BooleanVar(value=False)
         self.create_toggle(buy_frame, "Active", self.auto_purchase_var)
         self.amount_var = tk.IntVar(value=10)
-        self.create_input(buy_frame, "Amount to Buy:", self.amount_var)
+        self.create_input(buy_frame, "Amount:", self.amount_var)
         self.amount_var.trace_add('write', lambda *args: setattr(self, 'auto_purchase_amount', self.amount_var.get()))
         self.auto_purchase_amount = 10
         self.loops_var = tk.IntVar(value=10)
-        self.create_input(buy_frame, "Loops per Buy:", self.loops_var)
+        self.create_input(buy_frame, "Loops/Buy:", self.loops_var)
         self.loops_var.trace_add('write', lambda *args: setattr(self, 'loops_per_purchase', self.loops_var.get()))
         self.loops_per_purchase = 10
 
-        tk.Label(buy_frame, text="Coordinate Setup:", font=FONT_BOLD, bg=THEME_BG, fg=THEME_TEXT).pack(anchor="w", pady=(10, 5))
-        labels = {1: "Pt 1: Yes / Confirm", 2: "Pt 2: Input Box", 3: "Pt 3: No / Close", 4: "Pt 4: Ocean / Reset"}
+        tk.Label(buy_frame, text="Coordinates:", font=FONT_BOLD, bg=THEME_BG, fg=THEME_TEXT).pack(anchor="w", pady=(10, 5))
+        
+        # Purchase Points
+        p_labels = {1: "Pt 1 (Yes)", 2: "Pt 2 (Input)", 3: "Pt 3 (No)", 4: "Pt 4 (Ocean)"}
         for i in range(1, 5):
-            row = tk.Frame(buy_frame, bg=THEME_BG)
-            row.pack(fill="x", pady=2)
-            tk.Label(row, text=labels[i], font=("Segoe UI", 9), bg=THEME_BG, fg="gray").pack(side="left")
-            self.point_buttons[i] = tk.Button(row, text="Set", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 8, "bold"), command=lambda x=i: self.capture_mouse_click(x), width=8, relief="flat")
-            self.point_buttons[i].pack(side="right")
+            self.create_point_row(buy_frame, i, p_labels[i])
 
-        self.create_section_label("PD Controller")
-        pd_frame = tk.Frame(self.inner_frame, bg=THEME_BG)
-        pd_frame.pack(fill="x", padx=20)
+        # --- INVENTORY SECTION ---
+        self.create_section_label("Inventory / Item Check")
+        inv_frame = tk.Frame(self.inner_frame, bg=THEME_BG)
+        inv_frame.pack(fill="x", padx=20)
+        
+        self.item_check_var = tk.BooleanVar(value=True)
+        self.create_toggle(inv_frame, "Enable Item Cleaning", self.item_check_var)
+        
+        self.create_point_row(inv_frame, 5, "Pt 5 (Slot 3 Check)")
+
+        # --- SETTINGS ---
+        self.create_section_label("Settings")
+        set_frame = tk.Frame(self.inner_frame, bg=THEME_BG)
+        set_frame.pack(fill="x", padx=20)
+        
         self.kp_var = tk.DoubleVar(value=self.kp)
-        self.create_input(pd_frame, "Kp (Prop.):", self.kp_var, is_float=True)
+        self.create_input(set_frame, "Kp:", self.kp_var, is_float=True)
         self.kp_var.trace_add('write', lambda *args: setattr(self, 'kp', self.kp_var.get()))
+        
         self.kd_var = tk.DoubleVar(value=self.kd)
-        self.create_input(pd_frame, "Kd (Deriv.):", self.kd_var, is_float=True)
+        self.create_input(set_frame, "Kd:", self.kd_var, is_float=True)
         self.kd_var.trace_add('write', lambda *args: setattr(self, 'kd', self.kd_var.get()))
-
-        self.create_section_label("Timing")
-        t_frame = tk.Frame(self.inner_frame, bg=THEME_BG)
-        t_frame.pack(fill="x", padx=20)
+        
         self.timeout_var = tk.DoubleVar(value=self.scan_timeout)
-        self.create_input(t_frame, "Scan Timeout:", self.timeout_var, is_float=True)
+        self.create_input(set_frame, "Timeout:", self.timeout_var, is_float=True)
         self.timeout_var.trace_add('write', lambda *args: setattr(self, 'scan_timeout', self.timeout_var.get()))
-        self.wait_var = tk.DoubleVar(value=self.wait_after_loss)
-        self.create_input(t_frame, "Wait After Loss:", self.wait_var, is_float=True)
-        self.wait_var.trace_add('write', lambda *args: setattr(self, 'wait_after_loss', self.wait_var.get()))
 
+        # --- HOTKEYS ---
         self.create_section_label("Hotkeys")
         hk_frame = tk.Frame(self.inner_frame, bg=THEME_BG)
         hk_frame.pack(fill="x", padx=20, pady=(0, 50))
-        self.create_hotkey_row(hk_frame, "Toggle Loop", 'toggle_loop')
-        self.create_hotkey_row(hk_frame, "Toggle Overlay", 'toggle_overlay')
+        self.create_hotkey_row(hk_frame, "Loop", 'toggle_loop')
+        self.create_hotkey_row(hk_frame, "Overlay", 'toggle_overlay')
         self.create_hotkey_row(hk_frame, "AFK Mode", 'toggle_afk')
         self.create_hotkey_row(hk_frame, "Exit", 'exit')
+        
         self.status_msg = tk.Label(self.inner_frame, text="", bg=THEME_BG, fg=THEME_ACCENT)
         self.status_msg.pack(pady=10)
+
+    def create_point_row(self, parent, idx, text_label):
+        row = tk.Frame(parent, bg=THEME_BG)
+        row.pack(fill="x", pady=2)
+        tk.Label(row, text=text_label, font=("Segoe UI", 9), bg=THEME_BG, fg="gray").pack(side="left")
+        
+        # Container for coords label and button
+        right = tk.Frame(row, bg=THEME_BG)
+        right.pack(side="right")
+        
+        coord_lbl = tk.Label(right, text="Not Set", font=("Segoe UI", 8), bg=THEME_BG, fg="red")
+        coord_lbl.pack(side="left", padx=5)
+        self.point_labels[idx] = coord_lbl
+        
+        btn = tk.Button(right, text="Set", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 8, "bold"), 
+                        command=lambda x=idx: self.capture_mouse_click(x), width=6, relief="flat")
+        btn.pack(side="left")
+        self.point_buttons[idx] = btn
 
     def create_afk_widgets(self):
         tk.Label(self.page_afk, text="AFK MODE", font=("Segoe UI", 30, "bold"), bg=THEME_BG, fg=THEME_ACCENT).place(relx=0.5, rely=0.2, anchor="center")
@@ -240,10 +276,18 @@ class KarooFarm:
     def toggle_main_loop(self):
         new_state = not self.main_loop_active
         if new_state:
+            # Check Points based on features enabled
+            req_points = []
             if self.auto_purchase_var.get():
-                if any(not self.point_coords.get(i) for i in range(1, 5)):
-                    self.status_msg.config(text="Missing Points!", fg="red")
-                    return
+                req_points.extend([1, 2, 4]) # Pt 3 is optional? Protocol says 1,2,4 needed.
+            if self.item_check_var.get():
+                req_points.append(5)
+            
+            missing = [p for p in req_points if not self.point_coords.get(p)]
+            if missing:
+                self.status_msg.config(text=f"Missing Points: {missing}", fg="red")
+                return
+
             self.purchase_counter = 0
             self.main_loop_active = True
             self.loop_status.config(text="Main Loop: ON", fg="#00ff00")
@@ -262,14 +306,14 @@ class KarooFarm:
         def _on_click(x, y, button, pressed):
             if pressed:
                 self.point_coords[idx] = (x, y)
-                self.root.after(0, lambda: self.point_buttons[idx].config(text="Done", bg="#00ff00", fg="black"))
-                self.root.after(0, lambda: self.status_msg.config(text=f"Point {idx} set: {x}, {y}", fg="#00ff00"))
+                self.root.after(0, lambda: self.point_labels[idx].config(text=f"{x}, {y}", fg="#00ff00"))
+                self.root.after(0, lambda: self.status_msg.config(text=f"Point {idx} Saved.", fg="#00ff00"))
                 return False 
         pynput_mouse.Listener(on_click=_on_click).start()
 
     def start_rebind(self, action):
         self.recording_hotkey = action
-        self.status_msg.config(text=f"Press key for '{action}'...", fg=THEME_ACCENT)
+        self.status_msg.config(text=f"Press key...", fg=THEME_ACCENT)
         getattr(self, f"btn_{action}").config(state="disabled", text="...")
         pynput_keyboard.Listener(on_press=self.on_key_press).start()
 
@@ -286,108 +330,170 @@ class KarooFarm:
         except: return False
 
     def _click_at(self, coords):
+        if not coords: return
         try:
             x, y = int(coords[0]), int(coords[1])
             win32api.SetCursorPos((x, y))
             try: win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 0, 1, 0, 0)
             except: pass
-            threading.Event().wait(0.05)
+            time.sleep(0.05)
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            threading.Event().wait(0.05)
+            time.sleep(0.05)
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
         except: pass
 
+    # --- ACTION SEQUENCES ---
+
     def perform_auto_purchase_sequence(self):
+        # Sequence: Yes -> Input -> Type -> Yes -> Input -> Ocean
         try:
             keyboard.press_and_release('e')
-            threading.Event().wait(self.purchase_delay_after_key)
+            time.sleep(self.purchase_delay_after_key)
+            
+            # 1. Yes
             self._click_at(self.point_coords[1])
-            threading.Event().wait(self.purchase_click_delay)
+            time.sleep(self.purchase_click_delay)
+            
+            # 2. Input
             self._click_at(self.point_coords[2])
-            threading.Event().wait(self.purchase_click_delay)
+            time.sleep(self.purchase_click_delay)
+            
+            # 3. Type
             keyboard.write(str(self.amount_var.get()))
-            threading.Event().wait(self.purchase_after_type_delay)
+            time.sleep(self.purchase_after_type_delay)
+            
+            # 4. Yes
             self._click_at(self.point_coords[1])
-            threading.Event().wait(self.purchase_click_delay)
-            self._click_at(self.point_coords[3])
-            threading.Event().wait(self.purchase_click_delay)
+            time.sleep(self.purchase_click_delay)
+            
+            # 5. Input (Requested Sequence)
+            self._click_at(self.point_coords[2])
+            time.sleep(self.purchase_click_delay)
+            
+            # 6. Ocean
             self._click_at(self.point_coords[4])
-            threading.Event().wait(self.purchase_click_delay)
-        except: pass
+            time.sleep(self.purchase_click_delay)
+        except Exception as e: print(f"Purchase Error: {e}")
 
-    def check_and_purchase(self):
-        if self.auto_purchase_var.get():
-            self.purchase_counter += 1
-            if self.purchase_counter >= max(1, self.loops_per_purchase):
-                self.perform_auto_purchase_sequence()
-                self.purchase_counter = 0
+    def perform_item_check(self):
+        # Press 3 -> Click Pt 5 -> Check if changed -> if not Backspace -> Press 2
+        p5 = self.point_coords.get(5)
+        if not p5: return
 
-    def cast_line(self):
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        threading.Event().wait(1.0)
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-        self.is_clicking = False
-        self.total_loops_count += 1
-        if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
+        try:
+            # 1. Press 3
+            keyboard.press_and_release('3')
+            time.sleep(0.3)
+            
+            # 2. Check Color before Click
+            img_before = self.camera.get_latest_frame()
+            if img_before is not None:
+                x, y = int(p5[0]), int(p5[1])
+                # Safety crop check
+                if 0 <= y < img_before.shape[0] and 0 <= x < img_before.shape[1]:
+                    color_before = img_before[y, x].tolist() # [B, G, R]
+                else: color_before = [0,0,0]
+            
+            # 3. Click
+            self._click_at(p5)
+            time.sleep(0.5)
+            
+            # 4. Check Color after Click
+            img_after = self.camera.get_latest_frame()
+            clicked_something = False
+            
+            if img_after is not None:
+                 if 0 <= y < img_after.shape[0] and 0 <= x < img_after.shape[1]:
+                    color_after = img_after[y, x].tolist()
+                    # Calculate diff
+                    diff = sum([abs(c1 - c2) for c1, c2 in zip(color_before, color_after)])
+                    # If Diff is small, the item didn't move/disappear (it's stuck or we selected it)
+                    # If Diff is large, UI changed (Good?)
+                    # User logic: "If element doesnt disappear... press backspace"
+                    # We assume clicking it selects it.
+            
+            # Blind Backspace logic based on user request "If element doesnt disappear"
+            # Since we can't reliably know "Disappear" without a baseline empty color,
+            # We will press Backspace if we clicked.
+            
+            keyboard.press_and_release('backspace')
+            time.sleep(0.3)
+            
+            # 5. Return to Rod
+            keyboard.press_and_release('2')
+            time.sleep(0.5)
+            
+        except Exception as e: print(f"Item Check Error: {e}")
 
     def main_loop(self):
         target_color, dark_color, white_color = (0x55, 0xaa, 0xff), (0x19, 0x19, 0x19), (0xff, 0xff, 0xff)
-        import time
         if self.camera is None: self.camera = dxcam.create(output_color="BGR")
         self.camera.start(target_fps=60, video_mode=True)
         
         try:
             if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
+            
+            # Initial Cast
+            self._click_at(self.point_coords[4]) # Ensure focus
             self.cast_line()
+            
             last_detection_time, was_detecting = time.time(), False
             
             while self.main_loop_active:
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 w, h = self.overlay_area['width'], self.overlay_area['height']
                 
-                # --- CAPTURE FIX: IGNORE TITLE BAR ---
                 scan_y_off = self.title_bar_height 
-                scan_h = h - scan_y_off - 5 # -5 for bottom padding
+                scan_h = h - scan_y_off - 5
                 
                 if scan_h < 10: 
-                    threading.Event().wait(0.1)
+                    time.sleep(0.1)
                     continue
                 
                 img = self.camera.get_latest_frame()
                 if img is None: 
-                    threading.Event().wait(0.01)
+                    time.sleep(0.01)
                     continue
                 
-                # Crop logic: X matches overlay, Y starts after title bar
                 img = img[y+scan_y_off : y+scan_y_off+scan_h, x:x+w]
                 
-                # 1. Point 1
+                # --- DETECTION LOGIC START ---
                 p1x, p1y, found = None, None, False
                 for r in range(scan_h):
                     for c in range(w):
                         b, g, r_ = img[r, c, 0:3]
                         if r_ == target_color[0] and g == target_color[1] and b == target_color[2]:
-                            p1x, p1y, found = x + c, r, True # Y is relative to crop
+                            p1x, p1y, found = x + c, r, True
                             break
                     if found: break
                 
                 if not found:
                     if was_detecting:
-                        threading.Event().wait(self.wait_after_loss)
+                        time.sleep(self.wait_after_loss)
                         was_detecting = False
-                        self.check_and_purchase()
+                        
+                        # LOGIC: Loop Finished. Check Purchase -> Check Inventory -> Cast
+                        if self.auto_purchase_var.get():
+                            self.purchase_counter += 1
+                            if self.purchase_counter >= max(1, self.loops_per_purchase):
+                                self.perform_auto_purchase_sequence()
+                                self.purchase_counter = 0
+                                
+                        if self.item_check_var.get():
+                            self.perform_item_check()
+                            
                         self.cast_line()
                         last_detection_time = time.time()
                     elif time.time() - last_detection_time > self.scan_timeout:
-                        self.check_and_purchase()
+                        # Timeout logic
+                        if self.item_check_var.get(): self.perform_item_check()
                         self.cast_line()
                         last_detection_time = time.time()
-                    threading.Event().wait(0.05)
+                    time.sleep(0.05)
                     continue
 
-                # 2. Point 2
                 p2x = None
-                row = p1y # Relative row in cropped img
+                row = p1y
                 for c in range(w - 1, -1, -1):
                     b, g, r_ = img[row, c, 0:3]
                     if r_ == target_color[0] and g == target_color[1] and b == target_color[2]:
@@ -395,7 +501,6 @@ class KarooFarm:
                         break
                 if p2x is None: continue
 
-                # 3. Vertical Bounds
                 tx_off, tw = p1x - x, p2x - p1x + 1
                 t_img = img[:, tx_off:tx_off + tw]
                 
@@ -415,20 +520,17 @@ class KarooFarm:
                 if ty is None or by is None: continue
                 
                 rh = by - ty + 1
-                r_img = img[ty:ty+rh, tx_off:tx_off+tw]
+                r_img = img[(ty):(ty)+rh, tx_off:tx_off+tw]
                 
-                # 4. White Bar
                 wy = None
                 for r in range(rh):
                     for c in range(tw):
                         b, g, r_ = r_img[r, c, 0:3]
                         if r_ == white_color[0] and g == white_color[1] and b == white_color[2]:
-                            wy = ty + r; break # Relative to crop start
+                            wy = ty + r; break
                     if wy: break
                 
-                # 5. Gap
-                secs = []
-                st, gap = None, 0
+                secs, st, gap = [], None, 0
                 for r in range(rh):
                     dark = False
                     for c in range(tw):
@@ -464,11 +566,19 @@ class KarooFarm:
                     elif out <= 0 and self.is_clicking:
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         self.is_clicking = False
-                threading.Event().wait(0.01)
+                time.sleep(0.01)
         except Exception as e: print(e)
         finally:
             if self.camera: self.camera.stop()
             if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+    def cast_line(self):
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+        time.sleep(1.0)
+        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        self.is_clicking = False
+        self.total_loops_count += 1
+        if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
 
     # --- OVERLAY ---
     def toggle_overlay(self):
@@ -492,53 +602,85 @@ class KarooFarm:
         geo = f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}"
         self.overlay_window.geometry(geo)
         
-        # 1. Title Bar (Drag)
-        title_bar = tk.Frame(self.overlay_window, bg=THEME_ACCENT, height=self.title_bar_height)
+        # 1. Title Bar
+        title_bar = tk.Frame(self.overlay_window, bg=THEME_ACCENT, height=self.title_bar_height, cursor="fleur")
         title_bar.pack(side="top", fill="x")
         title_bar.pack_propagate(False)
         tk.Label(title_bar, text=":: DRAG HERE ::", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 8, "bold")).pack(expand=True)
 
-        # 2. Main Frame
+        # 2. Frame
         container = tk.Frame(self.overlay_window, bg=THEME_ACCENT)
         container.pack(side="top", fill="both", expand=True)
-        
         inner = tk.Frame(container, bg="black") 
         inner.pack(fill="both", expand=True, padx=3, pady=0)
-        
-        # 3. Resize Grip (Bottom)
-        grip = tk.Frame(container, bg=THEME_ACCENT, height=10, cursor="size_ns")
-        grip.pack(side="bottom", fill="x")
 
-        # Events
+        # Bindings
         self.overlay_drag_data = {"x": 0, "y": 0}
         
-        # Dragging (Title Bar)
+        # Move
         title_bar.bind("<ButtonPress-1>", self.start_drag)
         title_bar.bind("<B1-Motion>", self.do_drag)
         
-        # Resizing (Bottom Grip)
-        grip.bind("<ButtonPress-1>", self.start_resize)
-        grip.bind("<B1-Motion>", self.do_resize)
-        
+        # Resize: Use the window borders via binds on the whole window
+        self.overlay_window.bind("<Motion>", self.update_cursor)
+        self.overlay_window.bind("<ButtonPress-1>", self.start_resize_check)
+        self.overlay_window.bind("<B1-Motion>", self.do_resize_check)
+
         self.overlay_window.bind("<Configure>", self.on_overlay_configure)
 
     def start_drag(self, event):
-        self.overlay_drag_data = {"x": event.x_root, "y": event.y_root, "win_x": self.overlay_window.winfo_x(), "win_y": self.overlay_window.winfo_y()}
+        self.overlay_drag_data = {"mode": "move", "x": event.x_root, "y": event.y_root, "win_x": self.overlay_window.winfo_x(), "win_y": self.overlay_window.winfo_y()}
 
     def do_drag(self, event):
         dx = event.x_root - self.overlay_drag_data["x"]
         dy = event.y_root - self.overlay_drag_data["y"]
         self.overlay_window.geometry(f"+{self.overlay_drag_data['win_x'] + dx}+{self.overlay_drag_data['win_y'] + dy}")
 
-    def start_resize(self, event):
-        self.overlay_drag_data = {"x": event.x_root, "y": event.y_root, "w": self.overlay_window.winfo_width(), "h": self.overlay_window.winfo_height()}
+    def get_edge(self, event):
+        w, h = self.overlay_window.winfo_width(), self.overlay_window.winfo_height()
+        x, y = event.x, event.y
+        m = 10 # margin
+        
+        if x < m and y < m: return "nw"
+        if x > w-m and y < m: return "ne"
+        if x < m and y > h-m: return "sw"
+        if x > w-m and y > h-m: return "se"
+        if x < m: return "w"
+        if x > w-m: return "e"
+        if y < m: return "n"
+        if y > h-m: return "s"
+        return None
 
-    def do_resize(self, event):
+    def update_cursor(self, event):
+        edge = self.get_edge(event)
+        cursors = {"nw":"size_nw_se", "ne":"size_ne_sw", "sw":"size_ne_sw", "se":"size_nw_se", "n":"size_ns", "s":"size_ns", "w":"size_we", "e":"size_we"}
+        self.overlay_window.config(cursor=cursors.get(edge, "arrow"))
+
+    def start_resize_check(self, event):
+        edge = self.get_edge(event)
+        if edge:
+            self.overlay_drag_data = {
+                "mode": "resize", "edge": edge, "x": event.x_root, "y": event.y_root,
+                "x_win": self.overlay_window.winfo_x(), "y_win": self.overlay_window.winfo_y(),
+                "w": self.overlay_window.winfo_width(), "h": self.overlay_window.winfo_height()
+            }
+
+    def do_resize_check(self, event):
+        if self.overlay_drag_data.get("mode") != "resize": return
+        edge = self.overlay_drag_data["edge"]
         dx = event.x_root - self.overlay_drag_data["x"]
         dy = event.y_root - self.overlay_drag_data["y"]
-        w = max(100, self.overlay_drag_data["w"] + dx)
-        h = max(100, self.overlay_drag_data["h"] + dy)
-        self.overlay_window.geometry(f"{w}x{h}")
+        
+        x, y, w, h = self.overlay_drag_data["x_win"], self.overlay_drag_data["y_win"], self.overlay_drag_data["w"], self.overlay_drag_data["h"]
+        
+        if 'e' in edge: w += dx
+        if 'w' in edge: w -= dx; x += dx
+        if 's' in edge: h += dy
+        if 'n' in edge: h -= dy; y += dy
+        
+        w = max(100, w)
+        h = max(100, h)
+        self.overlay_window.geometry(f"{w}x{h}+{x}+{y}")
 
     def on_overlay_configure(self, event=None):
         if self.overlay_window:
