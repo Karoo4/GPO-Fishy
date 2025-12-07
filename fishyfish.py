@@ -66,10 +66,10 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # --- DELAYS (Faster) ---
-        self.purchase_delay_after_key = 1.5   
-        self.purchase_click_delay = 0.5       
-        self.purchase_after_type_delay = 0.5  
+        # --- DELAYS (Adjusted for Menu Loading) ---
+        self.purchase_delay_after_key = 2.5   # Increased: Wait for shop to fully open
+        self.purchase_click_delay = 1.2       # Increased: Wait for UI animations between clicks
+        self.purchase_after_type_delay = 1.0  # Increased: Wait after typing
         self.clean_step_delay = 0.5           
         
         # Items
@@ -329,18 +329,23 @@ class KarooFarm:
                 return
 
             keyboard.press_and_release('e')
+            # Wait for shop UI to open
             time.sleep(self.purchase_delay_after_key)
             
             self.click(self.point_coords[1], "Pt 1 (Yes)")
+            # Wait for input box to appear
             time.sleep(self.purchase_click_delay)
             
             self.click(self.point_coords[2], "Pt 2 (Input)")
+            # Wait for focus
             time.sleep(self.purchase_click_delay)
             
             keyboard.write(str(self.amount_var.get()))
+            # Wait for typing to register
             time.sleep(self.purchase_after_type_delay)
             
             self.click(self.point_coords[1], "Pt 1 (Confirm)")
+            # Wait for server transaction/animation
             time.sleep(self.purchase_click_delay)
             
             self.click(self.point_coords[2], "Pt 2 (Safety)")
@@ -625,4 +630,26 @@ class KarooFarm:
         w, h = self.drag_data["w"], self.drag_data["h"]
         if axis == "x": w += dx
         if axis == "y": h += dy
-        self.over
+        self.overlay_window.geometry(f"{max(50, w)}x{max(50, h)}")
+
+    def save_geo(self, e):
+        if self.overlay_window:
+            self.overlay_area = {'x': self.overlay_window.winfo_x(), 'y': self.overlay_window.winfo_y(), 
+                                 'width': self.overlay_window.winfo_width(), 'height': self.overlay_window.winfo_height()}
+
+    def destroy_overlay(self):
+        if self.overlay_window: self.overlay_window.destroy(); self.overlay_window = None
+
+    def exit_app(self):
+        self.main_loop_active = False
+        self.destroy_overlay()
+        try: keyboard.unhook_all()
+        except: pass
+        self.root.destroy()
+        sys.exit()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = KarooFarm(root)
+    root.protocol("WM_DELETE_WINDOW", app.exit_app)
+    root.mainloop()
