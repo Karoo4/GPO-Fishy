@@ -169,11 +169,11 @@ class KarooFarm:
         plabs = {1: "Pt 1 (Yes)", 2: "Pt 2 (Input)", 3: "Pt 3 (No)", 4: "Pt 4 (Ocean)"}
         for i in range(1, 5): self.create_point_row(frame, i, plabs[i])
 
-        # Inventory
-        self.create_section(frame, "Inventory / Item Check")
+        # Auto Store
+        self.create_section(frame, "Auto Store Fruit")
         self.item_check_var = tk.BooleanVar(value=True)
-        self.create_toggle(frame, "Enable Item Cleaning", self.item_check_var)
-        self.create_point_row(frame, 5, "Pt 5 (Slot 3 Check)")
+        self.create_toggle(frame, "Enable Auto Store", self.item_check_var)
+        self.create_point_row(frame, 5, "Pt 5 (Store Button)")
 
         # Settings
         self.create_section(frame, "Settings")
@@ -356,72 +356,54 @@ class KarooFarm:
             
         except Exception as e: print(f"Purchase Error: {e}")
 
-    def perform_item_check(self):
+    def perform_store_fruit(self):
         p5 = self.point_coords.get(5)
         if not p5: return
         
-        chk_x, chk_y = 1280, 1385
+        # User defined check coordinate
+        chk_x, chk_y = 1262, 156
 
-        def is_item_present():
+        def check_red_pixel():
             img = self.camera.get_latest_frame()
             if img is None: return False
             if chk_y >= img.shape[0] or chk_x >= img.shape[1]: return False
-            b, g, r = img[chk_y, chk_x] 
-            print(f"Hotbar Check ({chk_x},{chk_y}): RGB({r},{g},{b})")
-            is_black = (r < 30 and g < 30 and b < 30)
-            is_white = (r > 200 and g > 200 and b > 200)
-            return is_black or is_white
+            
+            b, g, r = img[chk_y, chk_x] # BGR format
+            
+            # Check for #ff6666 (R:255, G:102, B:102) with tolerance
+            # R should be high (>230), G and B should be mid (70-130)
+            match_r = r > 230
+            match_g = 70 < g < 130
+            match_b = 70 < b < 130
+            
+            return match_r and match_g and match_b
 
         try:
-            # 1. Initial Press 3
+            print("--- AUTO STORE SEQUENCE ---")
+            # 1. Equip potential fruit
             keyboard.press_and_release('3')
-            time.sleep(1.0) 
+            time.sleep(self.clean_step_delay)
 
-            if not is_item_present():
-                # --- STANDARD SEQUENCE (EMPTY) ---
-                print("Slot 3 Empty.")
-                keyboard.press_and_release('1')
-                time.sleep(self.clean_step_delay)
-                keyboard.press_and_release('2')
-                time.sleep(self.clean_step_delay)
-                return
+            # 2. Click Store Button
+            self.click(p5, "Pt 5 (Store Fruit)")
+            time.sleep(self.clean_step_delay) # Wait for text to appear
 
-            # --- DETECTION SEQUENCE (ITEM FOUND) ---
-            print("Item Found! Initiating Clean Protocol.")
-            keyboard.press_and_release('3') 
-            time.sleep(2.0) 
-
-            start_time = time.time()
-            cleared = False
-            
-            # Cleaning Loop: Max 5 seconds
-            while time.time() - start_time < 5.0:
-                print("Attempting to Store...")
-                self.click(p5, "Pt 5 (Store attempt)", hold_time=0.2)
-                time.sleep(self.clean_step_delay) 
-                
-                if not is_item_present():
-                    print("Item Cleared.")
-                    cleared = True
-                    # Success Sequence: Press 1 -> Press 2
-                    keyboard.press_and_release('1')
-                    time.sleep(self.clean_step_delay)
-                    keyboard.press_and_release('2')
-                    time.sleep(self.clean_step_delay)
-                    break
-                
-                print("Item still present, retrying...")
-            
-            # Fail Safe
-            if not cleared:
-                print("Clean Timeout (5s). Deleting Item.")
+            # 3. Check specific pixel for #ff6666
+            if check_red_pixel():
+                print("Duplicate Fruit Detected (#ff6666 found). Deleting...")
                 keyboard.press_and_release('backspace')
                 time.sleep(self.clean_step_delay)
-                keyboard.press_and_release('2')
-                time.sleep(self.clean_step_delay)
+            else:
+                print("Fruit Stored (or Empty/No Warning).")
+
+            # 4. Reset to Fists -> Rod
+            keyboard.press_and_release('1')
+            time.sleep(self.clean_step_delay)
+            keyboard.press_and_release('2')
+            time.sleep(self.clean_step_delay)
             
         except Exception as e: 
-            print(f"Check Error: {e}")
+            print(f"Store Error: {e}")
             keyboard.press_and_release('2')
 
     def run_loop(self):
@@ -472,12 +454,12 @@ class KarooFarm:
                                 self.purchase_counter = 0
                         
                         if self.item_check_var.get(): 
-                            self.perform_item_check()
+                            self.perform_store_fruit()
                             
                         self.cast(); last_det = time.time()
                     
                     elif time.time() - last_det > self.timeout_var.get():
-                        if self.item_check_var.get(): self.perform_item_check()
+                        if self.item_check_var.get(): self.perform_store_fruit()
                         self.cast(); last_det = time.time()
                     time.sleep(0.05); continue
                 
@@ -584,29 +566,26 @@ class KarooFarm:
         self.overlay_window.overrideredirect(True)
         self.overlay_window.attributes('-topmost', True)
         
-        # Make the window semi-transparent (filled) instead of hollow
+        # Filled Transparent Box (30% Opacity)
         self.overlay_window.attributes('-alpha', 0.3) 
-        # Remove the color key that made it hollow
-        # self.overlay_window.wm_attributes("-transparentcolor", "magenta")
         
         self.overlay_window.geometry(f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}")
         
-        # Use the theme accent for the fill color
+        # Filled with Theme Accent
         self.overlay_window.configure(bg=THEME_ACCENT)
 
-        # Create canvas for border
+        # Create canvas for border (and interaction)
         self.canvas = tk.Canvas(self.overlay_window, bg=THEME_ACCENT, 
                                 highlightthickness=self.border_size, 
                                 highlightbackground=THEME_ACCENT)
         self.canvas.pack(fill='both', expand=True)
 
-        # Bind events for the Advanced Resizable Logic
+        # Bind events
         self.canvas.bind('<Button-1>', self.on_mouse_down)
         self.canvas.bind('<B1-Motion>', self.on_mouse_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_mouse_up)
         self.canvas.bind('<Motion>', self.on_mouse_move)
         
-        # State vars for resize
         self.resizing = False
         self.dragging = False
         self.resize_edge = None
@@ -618,8 +597,7 @@ class KarooFarm:
         w = self.overlay_window.winfo_width()
         h = self.overlay_window.winfo_height()
         
-        edge = 15 # Sensitive area
-        
+        edge = 15
         left = x < edge
         right = x > w - edge
         top = y < edge
