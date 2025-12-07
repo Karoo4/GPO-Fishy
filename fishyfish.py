@@ -465,4 +465,199 @@ class KarooFarm:
                 
                 if not found:
                     if detecting:
-                        time.sleep(self.wait_a
+                        time.sleep(self.wait_after_loss)
+                        detecting = False
+                        
+                        if self.auto_purchase_var.get():
+                            self.purchase_counter += 1
+                            if self.purchase_counter >= self.loops_var.get():
+                                self.perform_auto_purchase_sequence()
+                                self.purchase_counter = 0
+                        
+                        if self.item_check_var.get(): 
+                            self.perform_item_check()
+                            
+                        self.cast(); last_det = time.time()
+                    
+                    elif time.time() - last_det > self.timeout_var.get():
+                        if self.item_check_var.get(): self.perform_item_check()
+                        self.cast(); last_det = time.time()
+                    time.sleep(0.05); continue
+                
+                detecting = True; last_det = time.time()
+                
+                p2x = None
+                for c in range(scan_w-1, -1, -1):
+                    b,g,r_ = img[p1y, c]
+                    if r_==target[0] and g==target[1] and b==target[2]:
+                        p2x = c; break
+                if not p2x: continue
+                
+                bar = img[:, p1x:p2x+1]
+                bh, bw = bar.shape[0], bar.shape[1]
+                
+                dark = (0x19, 0x19, 0x19)
+                ty, by = None, None
+                for r in range(bh):
+                    for c in range(bw):
+                        b,g,r_ = bar[r,c]
+                        if r_==dark[0] and g==dark[1] and b==dark[2]: ty=r; break
+                    if ty: break
+                for r in range(bh-1, -1, -1):
+                    for c in range(bw):
+                        b,g,r_ = bar[r,c]
+                        if r_==dark[0] and g==dark[1] and b==dark[2]: by=r; break
+                    if by: break
+                if not ty or not by: continue
+                
+                real = bar[ty:by+1, :]
+                rh = real.shape[0]
+                
+                white = (0xff, 0xff, 0xff)
+                wy = None
+                for r in range(rh):
+                    for c in range(bw):
+                        b,g,r_ = real[r,c]
+                        if r_==white[0] and g==white[1] and b==white[2]: wy=r; break
+                    if wy: break
+                
+                gaps = []
+                st, gc = None, 0
+                for r in range(rh):
+                    is_d = False
+                    for c in range(bw):
+                        b,g,r_ = real[r,c]
+                        if r_==dark[0] and g==dark[1] and b==dark[2]: is_d=True; break
+                    if is_d:
+                        if st is None: st = r
+                        gc = 0
+                    else:
+                        if st is not None:
+                            gc += 1
+                            if gc > 5:
+                                gaps.append((st, r-gc))
+                                st, gc = None, 0
+                if st: gaps.append((st, rh-1))
+                
+                if gaps and wy is not None:
+                    best = max(gaps, key=lambda x: x[1]-x[0])
+                    mid = (best[0] + best[1]) // 2
+                    
+                    err = mid - wy
+                    n_err = err / rh
+                    deriv = n_err - self.previous_error
+                    self.previous_error = n_err
+                    
+                    out = (self.kp_var.get() * n_err) + (self.kd_var.get() * deriv)
+                    
+                    if out > 0 and not self.is_clicking:
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                        self.is_clicking = True
+                    elif out <= 0 and self.is_clicking:
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                        self.is_clicking = False
+                
+                time.sleep(0.01)
+
+        except Exception as e: print(e)
+        finally:
+            self.camera.stop()
+            if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+    def cast(self):
+        # Cast uses a long hold (1.0s)
+        self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
+        self.is_clicking = False
+        self.total_loops_count += 1
+        if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
+
+    # --- OVERLAY ---
+    def toggle_overlay(self):
+        self.overlay_active = not self.overlay_active
+        if self.overlay_active:
+            self.overlay_status.config(text="Overlay: ON", fg=THEME_ACCENT)
+            self.create_overlay()
+        else:
+            self.overlay_status.config(text="Overlay: OFF", fg="gray")
+            self.destroy_overlay()
+
+    def create_overlay(self):
+        if self.overlay_window: return
+        self.overlay_window = tk.Toplevel(self.root)
+        self.overlay_window.overrideredirect(True)
+        self.overlay_window.attributes('-topmost', True)
+        self.overlay_window.attributes('-alpha', 0.8)
+        self.overlay_window.wm_attributes("-transparentcolor", "magenta")
+        
+        self.overlay_window.geometry(f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}")
+        
+        bg = tk.Frame(self.overlay_window, bg="magenta")
+        bg.pack(fill="both", expand=True)
+        
+        # 1. Title (Drag)
+        bar = tk.Frame(bg, bg=THEME_ACCENT, height=self.title_size, cursor="fleur")
+        bar.pack(side="top", fill="x")
+        
+        # 2. Borders (Resize)
+        bot = tk.Frame(bg, bg=THEME_ACCENT, height=self.border_size, cursor="sb_v_double_arrow")
+        bot.pack(side="bottom", fill="x")
+        
+        left = tk.Frame(bg, bg=THEME_ACCENT, width=self.border_size, cursor="sb_h_double_arrow")
+        left.pack(side="left", fill="y")
+        
+        right = tk.Frame(bg, bg=THEME_ACCENT, width=self.border_size, cursor="sb_h_double_arrow")
+        right.pack(side="right", fill="y")
+
+        # Bindings
+        self.drag_data = {"x": 0, "y": 0}
+        
+        bar.bind("<ButtonPress-1>", self.start_move)
+        bar.bind("<B1-Motion>", self.do_move)
+        
+        right.bind("<ButtonPress-1>", self.start_resize)
+        right.bind("<B1-Motion>", lambda e: self.do_resize(e, "x"))
+        bot.bind("<ButtonPress-1>", self.start_resize)
+        bot.bind("<B1-Motion>", lambda e: self.do_resize(e, "y"))
+        
+        self.overlay_window.bind("<Configure>", self.save_geo)
+
+    def start_move(self, e):
+        self.drag_data = {"x": e.x_root, "y": e.y_root, "wx": self.overlay_window.winfo_x(), "wy": self.overlay_window.winfo_y()}
+
+    def do_move(self, e):
+        dx = e.x_root - self.drag_data["x"]
+        dy = e.y_root - self.drag_data["y"]
+        self.overlay_window.geometry(f"+{self.drag_data['wx']+dx}+{self.drag_data['wy']+dy}")
+
+    def start_resize(self, e):
+        self.drag_data = {"x": e.x_root, "y": e.y_root, "w": self.overlay_window.winfo_width(), "h": self.overlay_window.winfo_height()}
+
+    def do_resize(self, e, axis):
+        dx = e.x_root - self.drag_data["x"]
+        dy = e.y_root - self.drag_data["y"]
+        w, h = self.drag_data["w"], self.drag_data["h"]
+        if axis == "x": w += dx
+        if axis == "y": h += dy
+        self.overlay_window.geometry(f"{max(50, w)}x{max(50, h)}")
+
+    def save_geo(self, e):
+        if self.overlay_window:
+            self.overlay_area = {'x': self.overlay_window.winfo_x(), 'y': self.overlay_window.winfo_y(), 
+                                 'width': self.overlay_window.winfo_width(), 'height': self.overlay_window.winfo_height()}
+
+    def destroy_overlay(self):
+        if self.overlay_window: self.overlay_window.destroy(); self.overlay_window = None
+
+    def exit_app(self):
+        self.main_loop_active = False
+        self.destroy_overlay()
+        try: keyboard.unhook_all()
+        except: pass
+        self.root.destroy()
+        sys.exit()
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = KarooFarm(root)
+    root.protocol("WM_DELETE_WINDOW", app.exit_app)
+    root.mainloop()
