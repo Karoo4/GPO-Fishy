@@ -66,7 +66,7 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # Auto Buy Timing
+        # Delays
         self.purchase_delay_after_key = 2.0
         self.purchase_click_delay = 0.8
         self.purchase_after_type_delay = 0.8
@@ -113,13 +113,11 @@ class KarooFarm:
         self.container = tk.Frame(self.root, bg=THEME_BG)
         self.container.pack(fill="both", expand=True)
 
-        # Main Page
         self.page_main = tk.Frame(self.container, bg=THEME_BG)
         self.page_main.place(relwidth=1, relheight=1)
         if self.bg_main: tk.Label(self.page_main, image=self.bg_main, bg=THEME_BG).place(x=0, y=0, relwidth=1, relheight=1)
         self.create_main_widgets()
 
-        # AFK Page
         self.page_afk = tk.Frame(self.container, bg=THEME_BG)
         if self.bg_afk: tk.Label(self.page_afk, image=self.bg_afk, bg=THEME_BG).place(x=0, y=0, relwidth=1, relheight=1)
         self.create_afk_widgets()
@@ -295,20 +293,21 @@ class KarooFarm:
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
-            print(f"Clicking at {x}, {y}")
             win32api.SetCursorPos((x, y))
-            # CRITICAL: Move event for game engine registration
-            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 0, 0, 0, 0) 
             time.sleep(0.05)
+            # CRITICAL: Force game to register movement
+            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 0, 0, 0, 0)
+            time.sleep(0.05)
+            # HOLD CLICK LONGER (0.2s)
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(0.1) # HOLD CLICK
+            time.sleep(0.2) 
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            time.sleep(0.05)
-        except Exception as e: print(f"Click Fail: {e}")
+            time.sleep(0.1)
+        except: pass
 
     def perform_auto_purchase_sequence(self):
         try:
-            print("Starting Auto-Buy...")
+            print("Buying...")
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
             self.click(self.point_coords[1])
@@ -330,7 +329,7 @@ class KarooFarm:
         if not p5: return
         
         try:
-            # 1. Capture color
+            # 1. Baseline Color
             img1 = self.camera.get_latest_frame()
             c1 = img1[int(p5[1]), int(p5[0])].tolist() if img1 is not None else [0,0,0]
             
@@ -338,24 +337,27 @@ class KarooFarm:
             keyboard.press_and_release('3')
             time.sleep(0.6)
             
-            # 3. Capture new color
+            # 3. New Color
             img2 = self.camera.get_latest_frame()
             c2 = img2[int(p5[1]), int(p5[0])].tolist() if img2 is not None else [0,0,0]
             
             # 4. Compare
             diff = sum([abs(a-b) for a,b in zip(c1, c2)])
             
-            # If no change, slot is empty -> Do nothing (avoid unequip)
+            # If no change, slot is empty. Continue loop.
             if diff < 15: 
-                print("Slot 3 Empty/No Change")
+                print("Slot 3 Empty - Resume")
                 return
 
-            print("Item Detected -> Cleaning")
+            print("Item Found - Cleaning")
+            time.sleep(0.3)
             self.click(p5)
+            time.sleep(0.5)
+            self.click(p5) # Click again per request
             time.sleep(0.5)
             keyboard.press_and_release('backspace')
             time.sleep(0.5)
-            keyboard.press_and_release('2') # Return to rod
+            keyboard.press_and_release('2') # Re-equip rod
             time.sleep(0.8)
             
         except Exception as e: print(f"Check Error: {e}")
@@ -528,7 +530,7 @@ class KarooFarm:
         bg = tk.Frame(self.overlay_window, bg="magenta")
         bg.pack(fill="both", expand=True)
         
-        # 1. Title (Drag) - REMOVED TEXT LABEL
+        # 1. Title (Drag)
         bar = tk.Frame(bg, bg=THEME_ACCENT, height=self.title_size, cursor="fleur")
         bar.pack(side="top", fill="x")
         
