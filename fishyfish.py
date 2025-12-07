@@ -53,6 +53,9 @@ class KarooFarm:
         self.is_clicking = False
         self.recording_hotkey = None
         
+        # --- CRITICAL FIX: SAFETY LOCK VARIABLE ---
+        self.last_cast_time = 0.0
+        
         # Overlay Logic State
         self.resize_threshold = 10
         self.dragging = False
@@ -425,21 +428,18 @@ class KarooFarm:
         self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
         self.is_clicking = False
         self.total_loops_count += 1
+        
+        # --- CRITICAL UPDATE: Update Last Cast Time ---
+        self.last_cast_time = time.time()
+        
         if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
         
-        # --- CRITICAL FIX ---
-        # We MUST wait here to ensure the "Charge Bar" (which looks like the minigame) 
-        # is gone and the rod has settled.
-        # If we scan too early, the bot sees the blue charge bar and thinks it's the minigame.
         self.previous_error = 0
-        print("Waiting 2s for bobber to settle...")
-        time.sleep(2.0) 
+        # No big sleep needed here anymore because we have the safety lock in the main loop
+        time.sleep(0.5)
 
     def run_loop(self):
-        """
-        Original 'main_loop' logic adapted for the new class.
-        """
-        print("Main Loop started (Using Original Detection)")
+        print("Main Loop started (Using Original Detection + SAFETY LOCK)")
         
         target_color = (0x55, 0xaa, 0xff)  # RGB
         dark_color = (0x19, 0x19, 0x19)
@@ -450,29 +450,22 @@ class KarooFarm:
         self.camera.start(target_fps=60, video_mode=True)
 
         try:
-            # Initial Purchase Check
-            if self.auto_purchase_var.get():
-                self.perform_auto_purchase_sequence()
+            if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
 
-            # Initial Cast
             self.cast()
             
             last_detection_time = time.time()
             was_detecting = False
 
             while self.main_loop_active:
-                # Use current overlay area
-                x = self.overlay_area['x']
-                y = self.overlay_area['y']
-                width = self.overlay_area['width']
-                height = self.overlay_area['height']
+                x, y = self.overlay_area['x'], self.overlay_area['y']
+                width, height = self.overlay_area['width'], self.overlay_area['height']
 
                 img = self.camera.get_latest_frame()
                 if img is None:
                     time.sleep(0.01)
                     continue
 
-                # Crop to region
                 img = img[y:y+height, x:x+width]
 
                 # 1. Find Point 1 (Left Blue Edge)
@@ -480,7 +473,6 @@ class KarooFarm:
                 point1_y = None
                 found_first = False
                 
-                # Scan left-to-right
                 for row_idx in range(height):
                     for col_idx in range(width):
                         b, g, r = img[row_idx, col_idx, 0:3]
@@ -492,38 +484,27 @@ class KarooFarm:
                     if found_first: break
 
                 if not found_first:
-                    # Logic for when bar is NOT found (Timeout or Fishing Done)
                     current_time = time.time()
                     
                     if was_detecting:
-                        # Just finished a game
-                        print("Lost detection (Game Over). Waiting...")
+                        print("Lost detection (Game Over).")
                         time.sleep(self.wait_after_loss)
                         was_detecting = False
                         self.is_clicking = False
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         
-                        # Check Auto Buy/Store
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
                                 self.perform_auto_purchase_sequence()
                                 self.purchase_counter = 0
-                        
-                        if self.item_check_var.get():
-                            self.perform_store_fruit()
-                            
+                        if self.item_check_var.get(): self.perform_store_fruit()
                         self.cast()
                         last_detection_time = time.time()
                         
                     elif current_time - last_detection_time > self.scan_timeout:
-                        # Timeout
                         print("Timeout. Recasting...")
-                        
-                        # Check Auto Store (Safety check)
-                        if self.item_check_var.get():
-                            self.perform_store_fruit()
-                            
+                        if self.item_check_var.get(): self.perform_store_fruit()
                         self.cast()
                         last_detection_time = time.time()
                     
@@ -540,11 +521,10 @@ class KarooFarm:
                         break
                 
                 if point2_x is None:
-                    time.sleep(0.1)
+                    time.sleep(0.01)
                     continue
 
-                # 3. Define Real Area based on DARK Background (#191919)
-                # This is the vital filtering step
+                # 3. Define Real Area
                 temp_area_x = point1_x
                 temp_area_width = point2_x - point1_x + 1
                 temp_x_offset = temp_area_x - x
@@ -576,11 +556,10 @@ class KarooFarm:
                     time.sleep(0.1)
                     continue
 
-                # 4. We found the bar! Scan for White Target inside the dark area
+                # 4. Check White Target
                 real_height = bottom_y - top_y + 1
                 real_x_offset = temp_x_offset
                 real_y_offset = top_y - y
-                
                 real_img = img[real_y_offset:real_y_offset+real_height, real_x_offset:real_x_offset+temp_area_width]
                 
                 white_top_y = None
@@ -592,11 +571,13 @@ class KarooFarm:
                             break
                     if white_top_y is not None: break
 
-                # 5. Find the Slider (Dark gaps in the bar)
+                if white_top_y is None: continue
+
+                # 5. FIND THE SLIDER
                 dark_sections = []
                 current_section_start = None
                 gap_counter = 0
-                max_gap = (real_height * 0.2) if white_top_y else 3 # Approx estimate
+                max_gap = (real_height * 0.2) if white_top_y else 3
 
                 for r_idx in range(real_height):
                     has_dark = False
@@ -629,7 +610,7 @@ class KarooFarm:
                         'size': section_end - current_section_start
                     })
 
-                # 6. Logic Controller
+                # --- 6. LOGIC & SAFETY LOCK ---
                 if dark_sections and white_top_y is not None:
                     was_detecting = True
                     last_detection_time = time.time()
@@ -642,13 +623,18 @@ class KarooFarm:
                     derivative = normalized_error - self.previous_error
                     self.previous_error = normalized_error
                     
-                    # Use current GUI values for Kp and Kd
                     pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
                     
+                    # === CRITICAL SAFETY CHECK ===
+                    # If we cast less than 3 seconds ago, WE REFUSE TO CLICK.
+                    # This guarantees the "reel in" cannot happen.
+                    time_since_cast = time.time() - self.last_cast_time
+                    
                     if pd_output > 0:
-                        if not self.is_clicking:
-                            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                            self.is_clicking = True
+                        if time_since_cast > 3.0: # ONLY CLICK IF SAFE
+                            if not self.is_clicking:
+                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                                self.is_clicking = True
                     else:
                         if self.is_clicking:
                             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
