@@ -14,13 +14,12 @@ import requests
 from io import BytesIO
 import time
 
-# --- 1. FORCE ADMIN (Fixes Clicking Issues) ---
+# --- 1. FORCE ADMIN (Required for Clicking) ---
 def is_admin():
     try: return ctypes.windll.shell32.IsUserAnAdmin()
     except: return False
 
 if not is_admin():
-    # Re-run the program with admin rights
     ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
     sys.exit()
 
@@ -67,10 +66,10 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # Auto Buy Timing (Slightly Slower for Reliability)
-        self.purchase_delay_after_key = 2.5
-        self.purchase_click_delay = 1.2
-        self.purchase_after_type_delay = 1.2
+        # Auto Buy Timing
+        self.purchase_delay_after_key = 2.0
+        self.purchase_click_delay = 0.8
+        self.purchase_after_type_delay = 0.8
         
         # Items
         self.check_items = True
@@ -296,17 +295,20 @@ class KarooFarm:
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
+            print(f"Clicking at {x}, {y}")
             win32api.SetCursorPos((x, y))
-            time.sleep(0.1)
+            # CRITICAL: Move event for game engine registration
+            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 0, 0, 0, 0) 
+            time.sleep(0.05)
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(0.15) # HOLD for 0.15s to ensure game sees it
+            time.sleep(0.1) # HOLD CLICK
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            time.sleep(0.1)
-        except: pass
+            time.sleep(0.05)
+        except Exception as e: print(f"Click Fail: {e}")
 
     def perform_auto_purchase_sequence(self):
         try:
-            print("Buying...")
+            print("Starting Auto-Buy...")
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
             self.click(self.point_coords[1])
@@ -327,37 +329,34 @@ class KarooFarm:
         p5 = self.point_coords.get(5)
         if not p5: return
         
-        # SMART LOGIC: Only delete if slot 3 changed (item equipped)
         try:
-            # 1. Get baseline color at Pt 5
+            # 1. Capture color
             img1 = self.camera.get_latest_frame()
             c1 = img1[int(p5[1]), int(p5[0])].tolist() if img1 is not None else [0,0,0]
             
-            # 2. Press 3 to switch
+            # 2. Press 3
             keyboard.press_and_release('3')
-            time.sleep(0.5)
+            time.sleep(0.6)
             
-            # 3. Get new color
+            # 3. Capture new color
             img2 = self.camera.get_latest_frame()
             c2 = img2[int(p5[1]), int(p5[0])].tolist() if img2 is not None else [0,0,0]
             
             # 4. Compare
             diff = sum([abs(a-b) for a,b in zip(c1, c2)])
             
-            # If diff is small, UI didn't change (Slot 3 was empty).
-            # If Slot 3 was empty, we are still on Rod (technically).
-            # Pressing 2 now would unequip rod. So we ABORT.
+            # If no change, slot is empty -> Do nothing (avoid unequip)
             if diff < 15: 
-                print("Slot 3 Empty/No Change - Skipping Clean")
+                print("Slot 3 Empty/No Change")
                 return
 
-            print("Item Detected - Cleaning")
+            print("Item Detected -> Cleaning")
             self.click(p5)
             time.sleep(0.5)
             keyboard.press_and_release('backspace')
             time.sleep(0.5)
-            keyboard.press_and_release('2') # Re-equip rod
-            time.sleep(0.8) # Wait for rod anim
+            keyboard.press_and_release('2') # Return to rod
+            time.sleep(0.8)
             
         except Exception as e: print(f"Check Error: {e}")
 
@@ -389,7 +388,6 @@ class KarooFarm:
                 img = img[scan_y:scan_y+scan_h, scan_x:scan_x+scan_w]
                 target = (0x55, 0xaa, 0xff)
                 
-                # Find Blue
                 p1x, p1y, found = None, None, False
                 for r in range(scan_h):
                     for c in range(scan_w):
@@ -403,7 +401,6 @@ class KarooFarm:
                         time.sleep(self.wait_after_loss)
                         detecting = False
                         
-                        # Loop Cycle Checks
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
@@ -422,7 +419,6 @@ class KarooFarm:
                 
                 detecting = True; last_det = time.time()
                 
-                # Track Bar
                 p2x = None
                 for c in range(scan_w-1, -1, -1):
                     b,g,r_ = img[p1y, c]
