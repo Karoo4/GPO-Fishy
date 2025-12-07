@@ -14,6 +14,16 @@ import requests
 from io import BytesIO
 import time
 
+# --- 1. FORCE ADMIN (Fixes Clicking Issues) ---
+def is_admin():
+    try: return ctypes.windll.shell32.IsUserAnAdmin()
+    except: return False
+
+if not is_admin():
+    # Re-run the program with admin rights
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, 1)
+    sys.exit()
+
 # --- CONFIGURATION ---
 THEME_BG = "#0b0b0b"
 THEME_ACCENT = "#ff8d00" # Orange
@@ -57,10 +67,10 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # Delays (Slightly increased for stability)
+        # Auto Buy Timing (Slightly Slower for Reliability)
         self.purchase_delay_after_key = 2.5
-        self.purchase_click_delay = 1.0
-        self.purchase_after_type_delay = 1.0
+        self.purchase_click_delay = 1.2
+        self.purchase_after_type_delay = 1.2
         
         # Items
         self.check_items = True
@@ -289,13 +299,14 @@ class KarooFarm:
             win32api.SetCursorPos((x, y))
             time.sleep(0.1)
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(0.1) # HOLD for 0.1s to register
+            time.sleep(0.15) # HOLD for 0.15s to ensure game sees it
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             time.sleep(0.1)
         except: pass
 
     def perform_auto_purchase_sequence(self):
         try:
+            print("Buying...")
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
             self.click(self.point_coords[1])
@@ -306,7 +317,7 @@ class KarooFarm:
             time.sleep(self.purchase_after_type_delay)
             self.click(self.point_coords[1])
             time.sleep(self.purchase_click_delay)
-            self.click(self.point_coords[2]) # Input again (Seq)
+            self.click(self.point_coords[2])
             time.sleep(self.purchase_click_delay)
             self.click(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
@@ -315,17 +326,40 @@ class KarooFarm:
     def perform_item_check(self):
         p5 = self.point_coords.get(5)
         if not p5: return
+        
+        # SMART LOGIC: Only delete if slot 3 changed (item equipped)
         try:
-            time.sleep(0.5)
+            # 1. Get baseline color at Pt 5
+            img1 = self.camera.get_latest_frame()
+            c1 = img1[int(p5[1]), int(p5[0])].tolist() if img1 is not None else [0,0,0]
+            
+            # 2. Press 3 to switch
             keyboard.press_and_release('3')
             time.sleep(0.5)
+            
+            # 3. Get new color
+            img2 = self.camera.get_latest_frame()
+            c2 = img2[int(p5[1]), int(p5[0])].tolist() if img2 is not None else [0,0,0]
+            
+            # 4. Compare
+            diff = sum([abs(a-b) for a,b in zip(c1, c2)])
+            
+            # If diff is small, UI didn't change (Slot 3 was empty).
+            # If Slot 3 was empty, we are still on Rod (technically).
+            # Pressing 2 now would unequip rod. So we ABORT.
+            if diff < 15: 
+                print("Slot 3 Empty/No Change - Skipping Clean")
+                return
+
+            print("Item Detected - Cleaning")
             self.click(p5)
             time.sleep(0.5)
             keyboard.press_and_release('backspace')
             time.sleep(0.5)
-            keyboard.press_and_release('2')
-            time.sleep(0.5)
-        except: pass
+            keyboard.press_and_release('2') # Re-equip rod
+            time.sleep(0.8) # Wait for rod anim
+            
+        except Exception as e: print(f"Check Error: {e}")
 
     def run_loop(self):
         if self.camera is None: self.camera = dxcam.create(output_color="BGR")
@@ -342,20 +376,17 @@ class KarooFarm:
                 ox, oy = self.overlay_area['x'], self.overlay_area['y']
                 ow, oh = self.overlay_area['width'], self.overlay_area['height']
                 
-                # IGNORE THICK BORDERS
                 scan_x = ox + self.border_size
                 scan_y = oy + self.title_size
                 scan_w = ow - (self.border_size * 2)
                 scan_h = oh - self.title_size - self.border_size
                 
-                if scan_w < 10 or scan_h < 10:
-                    time.sleep(0.1); continue
+                if scan_w < 10 or scan_h < 10: time.sleep(0.1); continue
                 
                 img = self.camera.get_latest_frame()
                 if img is None: time.sleep(0.01); continue
                 
                 img = img[scan_y:scan_y+scan_h, scan_x:scan_x+scan_w]
-                
                 target = (0x55, 0xaa, 0xff)
                 
                 # Find Blue
@@ -369,28 +400,22 @@ class KarooFarm:
                 
                 if not found:
                     if detecting:
-                        # FISH LOST or CAUGHT
                         time.sleep(self.wait_after_loss)
                         detecting = False
                         
-                        # LOGIC: Check Purchase -> Check Items -> Cast
-                        
-                        # 1. Purchase Check
+                        # Loop Cycle Checks
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
                                 self.perform_auto_purchase_sequence()
                                 self.purchase_counter = 0
                         
-                        # 2. Item Check (Only runs here, between casts)
                         if self.item_check_var.get(): 
                             self.perform_item_check()
                             
-                        # 3. Cast
                         self.cast(); last_det = time.time()
                     
                     elif time.time() - last_det > self.timeout_var.get():
-                        # TIMEOUT
                         if self.item_check_var.get(): self.perform_item_check()
                         self.cast(); last_det = time.time()
                     time.sleep(0.05); continue
