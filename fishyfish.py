@@ -66,10 +66,9 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # --- DELAYS (Increased for reliability) ---
-        self.purchase_delay_after_key = 4.0   # Wait 4s for shop to open
-        self.purchase_click_delay = 2.0       # Wait 2s between clicks
-        self.purchase_after_type_delay = 2.0  # Wait 2s after typing number
+        # --- DELAYS ---
+        self.purchase_delay_after_key = 4.0   
+        self.purchase_click_delay = 2.0       
         self.clean_step_delay = 0.5           
         
         # Items
@@ -333,19 +332,18 @@ class KarooFarm:
             time.sleep(self.purchase_delay_after_key)
             
             self.click(self.point_coords[1], "Pt 1 (Yes)")
-            # Wait for input box to appear
             time.sleep(self.purchase_click_delay)
             
+            # Click Input box, immediately type, then press Enter
             self.click(self.point_coords[2], "Pt 2 (Input)")
-            # Wait for focus
-            time.sleep(self.purchase_click_delay)
-            
+            time.sleep(0.1) # Brief focus wait
             keyboard.write(str(self.amount_var.get()))
-            # Wait for typing to register
-            time.sleep(self.purchase_after_type_delay)
+            keyboard.press_and_release('enter')
+            
+            # Wait AFTER typing/entering
+            time.sleep(self.purchase_click_delay)
             
             self.click(self.point_coords[1], "Pt 1 (Confirm)")
-            # Wait for server transaction/animation
             time.sleep(self.purchase_click_delay)
             
             self.click(self.point_coords[2], "Pt 2 (Safety)")
@@ -375,38 +373,51 @@ class KarooFarm:
             return is_black or is_white
 
         try:
-            # 1. Press 3 to start checking slot 3
+            # 1. Initial Press 3 to start checking slot 3
             keyboard.press_and_release('3')
             time.sleep(0.6)
 
-            attempts = 0
-            # Allow up to 2 attempts to store
-            while is_item_present():
-                if attempts < 2:
-                    print(f"Item detected. Storage Attempt {attempts+1}")
-                    # Sequence: Click Pt 5 -> Press 1 -> Press 2 -> Press 3
-                    self.click(p5, "Pt 5 (Store)")
-                    time.sleep(self.clean_step_delay)
-                    
-                    keyboard.press_and_release('1')
-                    time.sleep(self.clean_step_delay)
-                    
-                    keyboard.press_and_release('2')
-                    time.sleep(self.clean_step_delay)
-                    
-                    keyboard.press_and_release('3')
-                    time.sleep(0.6) # Wait for equip animation
-                    attempts += 1
-                else:
-                    # If we failed twice (Pt 5 pressed twice in a row), DELETE
-                    print("Storage failed twice. Deleting.")
-                    keyboard.press_and_release('backspace')
-                    time.sleep(self.clean_step_delay)
-                    break 
+            if not is_item_present():
+                # --- STANDARD SEQUENCE (EMPTY) ---
+                print("Slot 3 Empty.")
+                keyboard.press_and_release('1')
+                time.sleep(0.1)
+                keyboard.press_and_release('2')
+                time.sleep(0.8)
+                return
+
+            # --- DETECTION SEQUENCE (ITEM FOUND) ---
+            print("Item Found! Initiating Clean Protocol.")
+            keyboard.press_and_release('3') # Press 3 again as requested
+            time.sleep(2.0) # Requested Wait
+
+            start_time = time.time()
+            cleared = False
             
-            # Always return to rod (Press 2)
-            keyboard.press_and_release('2')
-            time.sleep(0.8)
+            # Cleaning Loop: Max 5 seconds
+            while time.time() - start_time < 5.0:
+                self.click(p5, "Pt 5 (Store attempt)")
+                time.sleep(0.5) # Brief delay for UI update
+                
+                if not is_item_present():
+                    print("Item Cleared.")
+                    cleared = True
+                    # Success Sequence: Press 1 -> Press 2
+                    keyboard.press_and_release('1')
+                    time.sleep(0.1)
+                    keyboard.press_and_release('2')
+                    time.sleep(0.8)
+                    break
+                
+                print("Item still present, retrying click...")
+            
+            # Fail Safe: Timeout reached
+            if not cleared:
+                print("Clean Timeout (5s). Deleting Item.")
+                keyboard.press_and_release('backspace')
+                time.sleep(0.5)
+                keyboard.press_and_release('2')
+                time.sleep(0.8)
             
         except Exception as e: 
             print(f"Check Error: {e}")
