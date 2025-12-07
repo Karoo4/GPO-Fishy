@@ -66,10 +66,14 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # --- DELAYS (Significantly Slower) ---
-        self.purchase_delay_after_key = 4.0   
-        self.purchase_click_delay = 2.0       
-        self.clean_step_delay = 1.5           # Requested 1.5s delay per action
+        # --- DELAYS ---
+        # Reverted Auto Purchase Delays (Faster)
+        self.purchase_delay_after_key = 2.0   
+        self.purchase_click_delay = 0.8       
+        self.purchase_after_type_delay = 0.8
+        
+        # Item Clean Delay (Slow/Safe)
+        self.clean_step_delay = 1.5           
         
         # Items
         self.check_items = True
@@ -329,20 +333,16 @@ class KarooFarm:
 
             print("Pressing E to open shop...")
             keyboard.press_and_release('e')
-            # Wait for shop UI to open
             time.sleep(self.purchase_delay_after_key)
             
             self.click(self.point_coords[1], "Pt 1 (Yes)")
             time.sleep(self.purchase_click_delay)
             
-            # Click Input box, immediately type, then press Enter
             self.click(self.point_coords[2], "Pt 2 (Input)")
-            time.sleep(0.1) # Brief focus wait
-            keyboard.write(str(self.amount_var.get()))
-            keyboard.press_and_release('enter')
-            
-            # Wait AFTER typing/entering
             time.sleep(self.purchase_click_delay)
+            
+            keyboard.write(str(self.amount_var.get()))
+            time.sleep(self.purchase_after_type_delay)
             
             self.click(self.point_coords[1], "Pt 1 (Confirm)")
             time.sleep(self.purchase_click_delay)
