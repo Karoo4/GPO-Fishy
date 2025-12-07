@@ -66,11 +66,11 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # --- DELAYS (Faster now) ---
-        self.purchase_delay_after_key = 1.5   # Wait for shop to open
-        self.purchase_click_delay = 0.5       # Delay between UI clicks (was 0.8)
-        self.purchase_after_type_delay = 0.5  # Delay after typing number
-        self.clean_step_delay = 0.4           # Delay between clean clicks
+        # --- DELAYS (Faster) ---
+        self.purchase_delay_after_key = 1.5   
+        self.purchase_click_delay = 0.5       
+        self.purchase_after_type_delay = 0.5  
+        self.clean_step_delay = 0.5           
         
         # Items
         self.check_items = True
@@ -292,10 +292,6 @@ class KarooFarm:
         pynput_keyboard.Listener(on_press=on_press).start()
 
     def click(self, pt, debug_name="Target", hold_time=0.05):
-        """
-        Fast clicking with absolute movement. 
-        hold_time: 0.05 for UI, 1.0 for Rod Cast.
-        """
         if not pt: 
             print(f"Skipping {debug_name} - No Coords")
             return
@@ -314,7 +310,7 @@ class KarooFarm:
             # 3. DOWN
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
             
-            # 4. HOLD (Configurable)
+            # 4. HOLD
             time.sleep(hold_time) 
             
             # 5. UP
@@ -360,60 +356,56 @@ class KarooFarm:
         p5 = self.point_coords.get(5)
         if not p5: return
         
-        def check_color_match():
+        # Hardcoded check coords
+        chk_x, chk_y = 1280, 1385
+
+        def is_item_present():
             img = self.camera.get_latest_frame()
             if img is None: return False
             
-            target_x, target_y = int(p5[0]), int(p5[1])
-            found_match = False
-
-            # Search 5x5 area
-            for dy in range(-2, 3): 
-                for dx in range(-2, 3):
-                    cy, cx = target_y + dy, target_x + dx
-                    if 0 <= cy < img.shape[0] and 0 <= cx < img.shape[1]:
-                        b, g, r = img[cy, cx] 
-
-                        # Tolerances widened significantly to catch "close to" colors
-                        # 1. White-ish (Allow light gray)
-                        is_white = (r > 220 and g > 220 and b > 220)
-                        
-                        # 2. Green-ish 
-                        # Target: R:47 G:120 B:7. 
-                        # Tolerance: 60 (Very wide)
-                        is_green = (abs(r - 47) < 60 and abs(g - 120) < 60 and abs(b - 7) < 60)
-
-                        if is_white or is_green:
-                            found_match = True
-                            break
-                if found_match: break
+            # Safety bound check
+            if chk_y >= img.shape[0] or chk_x >= img.shape[1]: 
+                print("Error: Hotbar check coords out of bounds!")
+                return False
             
-            return found_match
+            b, g, r = img[chk_y, chk_x] 
+            
+            # Print color for debugging
+            print(f"Hotbar Check ({chk_x},{chk_y}): RGB({r},{g},{b})")
+
+            # 1. Black detection (Allow very dark grey)
+            is_black = (r < 30 and g < 30 and b < 30)
+            
+            # 2. White detection (Allow bright grey)
+            is_white = (r > 200 and g > 200 and b > 200)
+
+            return is_black or is_white
 
         try:
             keyboard.press_and_release('3')
             time.sleep(0.6) # Wait for equip
             
-            # If ANY match found, start cleaning process
-            if check_color_match():
-                print("Item Detected (White/Green) - Initiating Clean")
-                time.sleep(0.2)
-                
-                # First Click
-                self.click(p5, "Pt 5 (Clean 1)")
-                time.sleep(self.clean_step_delay)
-                
-                # Verify match still exists (Safety)
-                if check_color_match():
-                    # Second Click
-                    self.click(p5, "Pt 5 (Clean 2)")
+            # Loop max 3 times for storage attempts
+            item_still_there = False
+            
+            for i in range(3):
+                if is_item_present():
+                    item_still_there = True
+                    print(f"Item detected (Attempt {i+1}). Clicking Pt 5.")
+                    self.click(p5, f"Pt 5 (Clean {i+1})")
                     time.sleep(self.clean_step_delay)
-                    
-                    # Final Verification
-                    if check_color_match():
-                        print("Confirmed. Deleting.")
-                        keyboard.press_and_release('backspace')
-                        time.sleep(self.clean_step_delay)
+                else:
+                    item_still_there = False
+                    print("Item cleared.")
+                    break
+            
+            # Final Check: If it survived 3 clicks, it's trash.
+            if item_still_there:
+                 # Check one last time to be sure
+                 if is_item_present():
+                    print("Item stuck after 3 tries. Deleting.")
+                    keyboard.press_and_release('backspace')
+                    time.sleep(self.clean_step_delay)
             
             keyboard.press_and_release('2')
             time.sleep(0.8)
@@ -633,26 +625,4 @@ class KarooFarm:
         w, h = self.drag_data["w"], self.drag_data["h"]
         if axis == "x": w += dx
         if axis == "y": h += dy
-        self.overlay_window.geometry(f"{max(50, w)}x{max(50, h)}")
-
-    def save_geo(self, e):
-        if self.overlay_window:
-            self.overlay_area = {'x': self.overlay_window.winfo_x(), 'y': self.overlay_window.winfo_y(), 
-                                 'width': self.overlay_window.winfo_width(), 'height': self.overlay_window.winfo_height()}
-
-    def destroy_overlay(self):
-        if self.overlay_window: self.overlay_window.destroy(); self.overlay_window = None
-
-    def exit_app(self):
-        self.main_loop_active = False
-        self.destroy_overlay()
-        try: keyboard.unhook_all()
-        except: pass
-        self.root.destroy()
-        sys.exit()
-
-if __name__ == "__main__":
-    root = tk.Tk()
-    app = KarooFarm(root)
-    root.protocol("WM_DELETE_WINDOW", app.exit_app)
-    root.mainloop()
+        self.over
