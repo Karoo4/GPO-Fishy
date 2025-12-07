@@ -77,6 +77,7 @@ class KarooFarm:
         self.previous_error = 0
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
+        self.cast_settle_delay = 2.5 # Time to wait for bobber to settle
         
         # --- DELAYS ---
         self.purchase_delay_after_key = 2.0   
@@ -459,8 +460,13 @@ class KarooFarm:
                 
                 if not found:
                     if detecting:
+                        # Minigame finished or lost
                         time.sleep(self.wait_after_loss)
                         detecting = False
+                        
+                        # FORCE MOUSE UP SAFETY
+                        self.is_clicking = False
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
@@ -474,6 +480,7 @@ class KarooFarm:
                         self.cast(); last_det = time.time()
                     
                     elif time.time() - last_det > self.timeout_var.get():
+                        # Timeout
                         if self.item_check_var.get(): self.perform_store_fruit()
                         self.cast(); last_det = time.time()
                     time.sleep(0.05); continue
@@ -556,14 +563,26 @@ class KarooFarm:
         except Exception as e: print(e)
         finally:
             self.camera.stop()
-            if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            if self.is_clicking: 
+                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                self.is_clicking = False
 
     def cast(self):
         # Cast uses a long hold (1.0s)
         self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
+        
+        # 1. Reset Click Status
         self.is_clicking = False
+        
+        # 2. Reset PD Controller to prevent erratic movement on start
+        self.previous_error = 0
+        
         self.total_loops_count += 1
         if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
+        
+        # 3. Wait for bobber to settle so we don't scan the ocean splash
+        print("Waiting for bobber to settle...")
+        time.sleep(self.cast_settle_delay)
 
     # --- OVERLAY ---
     def toggle_overlay(self):
