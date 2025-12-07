@@ -31,14 +31,16 @@ FONT_BOLD = ("Segoe UI", 11, "bold")
 FONT_TITLE = ("Segoe UI", 20, "bold")
 FONT_AFK = ("Segoe UI", 48, "bold")
 
+# IMAGE URLS
 VIVI_URL = "https://static0.srcdn.com/wordpress/wp-content/uploads/2023/10/vivi.jpg?q=49&fit=crop&w=825&dpr=2"
 DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2FX8YUuU7OpOA%2Fmaxresdefault.jpg&f=1&nofb=1&ipt=6d669298669fff2e4f438b54453c1f59c1655ca19fa2407ea1c42e471a4d7ab6"
+TITLE_LOGO_URL = "https://image2url.com/images/1765149562249-ff56b103-b5ea-4402-a896-0ed38202b804.png"
 
 class KarooFarm:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Farm")
-        self.root.geometry("450x900") # Slightly taller for new option
+        self.root.title("Karoo Fish")
+        self.root.geometry("450x900")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
 
@@ -103,13 +105,14 @@ class KarooFarm:
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         self.camera = None
         
-        # Added Pt 6 for Bait
+        # Points
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None}
         self.point_labels = {} 
 
         # Images
         self.bg_main = self.load_processed_image(VIVI_URL, 0.3)
         self.bg_afk = self.load_processed_image(DUCK_URL, 0.4)
+        self.img_title = self.load_title_image(TITLE_LOGO_URL)
 
         self.setup_ui()
         self.register_hotkeys()
@@ -119,11 +122,25 @@ class KarooFarm:
         except: return 1.0
 
     def load_processed_image(self, url, darkness=0.5):
+        # Loads background wallpapers
         try:
             response = requests.get(url, timeout=5)
             img = Image.open(BytesIO(response.content))
             img = img.resize((500, 950), Image.Resampling.LANCZOS)
             return ImageTk.PhotoImage(ImageEnhance.Brightness(img).enhance(darkness))
+        except: return None
+
+    def load_title_image(self, url):
+        # Loads the Logo resizing it to fit width ~300px
+        try:
+            response = requests.get(url, timeout=5)
+            img = Image.open(BytesIO(response.content))
+            w, h = img.size
+            aspect = h / w
+            new_w = 300
+            new_h = int(new_w * aspect)
+            img = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+            return ImageTk.PhotoImage(img)
         except: return None
 
     # --- UI ---
@@ -152,7 +169,11 @@ class KarooFarm:
         frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
-        tk.Label(frame, text="Karoo Farm", font=FONT_TITLE, bg=THEME_BG, fg=THEME_ACCENT).pack(pady=(20, 10))
+        # --- LOGO SECTION ---
+        if self.img_title:
+            tk.Label(frame, image=self.img_title, bg=THEME_BG).pack(pady=(20, 10))
+        else:
+            tk.Label(frame, text="Karoo Fish", font=FONT_TITLE, bg=THEME_BG, fg=THEME_ACCENT).pack(pady=(20, 10))
 
         # Status
         st = tk.Frame(frame, bg=THEME_BG, highlightbackground=THEME_ACCENT, highlightthickness=1)
@@ -462,7 +483,6 @@ class KarooFarm:
             self.is_performing_action = False # UNBLOCK CASTING
 
     def perform_bait_select(self):
-        # Only run if enabled
         if not self.auto_bait_var.get(): return
         
         p6 = self.point_coords.get(6)
@@ -474,7 +494,7 @@ class KarooFarm:
             
             # 1. Click the Bait Location
             self.click(p6, "Pt 6 (Bait Select)")
-            time.sleep(0.5) # Short wait for UI register
+            time.sleep(0.5) 
             
             # 2. Move Cursor back to Ocean (Pt 4)
             self.move_to(self.point_coords[4])
@@ -575,7 +595,7 @@ class KarooFarm:
                         if self.item_check_var.get(): 
                             self.perform_store_fruit()
                             
-                        # 3. Auto Bait (NEW)
+                        # 3. Auto Bait
                         if self.auto_bait_var.get():
                             self.perform_bait_select()
                         
@@ -809,7 +829,7 @@ class KarooFarm:
             'left': x < edge,
             'right': x > w - edge,
             'top': y < edge,
-            'bottom': y > h - edge
+            'bottom': y < h - edge
         }
         
         if any(self.resize_edge.values()):
