@@ -46,9 +46,6 @@ class KarooFarm:
         self.overlay_window = None
         self.is_clicking = False
         
-        # Overlay Settings
-        self.title_bar_height = 30 # Height of the draggable area
-        
         # Counters and Logic
         self.purchase_counter = 0     
         self.total_loops_count = 0    
@@ -60,6 +57,7 @@ class KarooFarm:
         self.purchase_delay_after_key = 2.0
         self.purchase_click_delay = 0.8
         self.purchase_after_type_delay = 0.8
+        self.title_bar_height = 30  # Height of the orange drag bar
 
         self.dpi_scale = self.get_dpi_scale()
 
@@ -347,9 +345,10 @@ class KarooFarm:
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 w, h = self.overlay_area['width'], self.overlay_area['height']
                 
-                # IMPORTANT: ADJUST SCAN AREA TO IGNORE TITLE BAR
-                scan_y = y + self.title_bar_height
-                scan_h = h - self.title_bar_height
+                # --- CAPTURE FIX: IGNORE TITLE BAR ---
+                scan_y_off = self.title_bar_height 
+                scan_h = h - scan_y_off - 5 # -5 for bottom padding
+                
                 if scan_h < 10: 
                     threading.Event().wait(0.1)
                     continue
@@ -359,15 +358,16 @@ class KarooFarm:
                     threading.Event().wait(0.01)
                     continue
                 
-                img = img[scan_y:scan_y+scan_h, x:x+w] # Crop to hollow part
+                # Crop logic: X matches overlay, Y starts after title bar
+                img = img[y+scan_y_off : y+scan_y_off+scan_h, x:x+w]
                 
-                # Logic: Find Blue Bar (Pt1/Pt2)
+                # 1. Point 1
                 p1x, p1y, found = None, None, False
                 for r in range(scan_h):
                     for c in range(w):
                         b, g, r_ = img[r, c, 0:3]
                         if r_ == target_color[0] and g == target_color[1] and b == target_color[2]:
-                            p1x, p1y, found = x + c, scan_y + r, True
+                            p1x, p1y, found = x + c, r, True # Y is relative to crop
                             break
                     if found: break
                 
@@ -385,8 +385,9 @@ class KarooFarm:
                     threading.Event().wait(0.05)
                     continue
 
+                # 2. Point 2
                 p2x = None
-                row = p1y - scan_y
+                row = p1y # Relative row in cropped img
                 for c in range(w - 1, -1, -1):
                     b, g, r_ = img[row, c, 0:3]
                     if r_ == target_color[0] and g == target_color[1] and b == target_color[2]:
@@ -394,7 +395,7 @@ class KarooFarm:
                         break
                 if p2x is None: continue
 
-                # Bounds
+                # 3. Vertical Bounds
                 tx_off, tw = p1x - x, p2x - p1x + 1
                 t_img = img[:, tx_off:tx_off + tw]
                 
@@ -403,28 +404,31 @@ class KarooFarm:
                     for c in range(tw):
                         b, g, r_ = t_img[r, c, 0:3]
                         if r_ == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
-                            ty = scan_y + r; break
+                            ty = r; break
                     if ty: break
                 for r in range(scan_h - 1, -1, -1):
                     for c in range(tw):
                         b, g, r_ = t_img[r, c, 0:3]
                         if r_ == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
-                            by = scan_y + r; break
+                            by = r; break
                     if by: break
                 if ty is None or by is None: continue
                 
                 rh = by - ty + 1
-                r_img = img[(ty-scan_y):(ty-scan_y)+rh, tx_off:tx_off+tw]
+                r_img = img[ty:ty+rh, tx_off:tx_off+tw]
                 
+                # 4. White Bar
                 wy = None
                 for r in range(rh):
                     for c in range(tw):
                         b, g, r_ = r_img[r, c, 0:3]
                         if r_ == white_color[0] and g == white_color[1] and b == white_color[2]:
-                            wy = ty + r; break
+                            wy = ty + r; break # Relative to crop start
                     if wy: break
                 
-                secs, st, gap = [], None, 0
+                # 5. Gap
+                secs = []
+                st, gap = None, 0
                 for r in range(rh):
                     dark = False
                     for c in range(tw):
@@ -488,72 +492,53 @@ class KarooFarm:
         geo = f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}"
         self.overlay_window.geometry(geo)
         
-        # 1. Title Bar (Opaque Orange) - DRAG HERE
+        # 1. Title Bar (Drag)
         title_bar = tk.Frame(self.overlay_window, bg=THEME_ACCENT, height=self.title_bar_height)
         title_bar.pack(side="top", fill="x")
         title_bar.pack_propagate(False)
         tk.Label(title_bar, text=":: DRAG HERE ::", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 8, "bold")).pack(expand=True)
 
-        # 2. Hollow Frame (Orange Borders, Transparent Center)
+        # 2. Main Frame
         container = tk.Frame(self.overlay_window, bg=THEME_ACCENT)
         container.pack(side="top", fill="both", expand=True)
         
-        inner = tk.Frame(container, bg="black") # Black becomes transparent
-        inner.pack(fill="both", expand=True, padx=3, pady=(0, 3))
+        inner = tk.Frame(container, bg="black") 
+        inner.pack(fill="both", expand=True, padx=3, pady=0)
+        
+        # 3. Resize Grip (Bottom)
+        grip = tk.Frame(container, bg=THEME_ACCENT, height=10, cursor="size_ns")
+        grip.pack(side="bottom", fill="x")
 
-        self.overlay_drag_data = {"x": 0, "y": 0, "edge": None}
+        # Events
+        self.overlay_drag_data = {"x": 0, "y": 0}
         
-        # Bind Drag to Title Bar
-        title_bar.bind("<ButtonPress-1>", self.start_overlay_drag)
-        title_bar.bind("<B1-Motion>", self.overlay_motion)
+        # Dragging (Title Bar)
+        title_bar.bind("<ButtonPress-1>", self.start_drag)
+        title_bar.bind("<B1-Motion>", self.do_drag)
         
-        # Bind Resize to Container
-        container.bind("<ButtonPress-1>", self.start_overlay_drag)
-        container.bind("<B1-Motion>", self.overlay_motion)
-        container.bind("<Motion>", self.update_cursor)
+        # Resizing (Bottom Grip)
+        grip.bind("<ButtonPress-1>", self.start_resize)
+        grip.bind("<B1-Motion>", self.do_resize)
         
         self.overlay_window.bind("<Configure>", self.on_overlay_configure)
 
-    def get_resize_edge(self, x, y, width, height):
-        e = 15
-        if y < e and x < e: return "nw"
-        if y < e and x > width - e: return "ne"
-        if y > height - e and x < e: return "sw"
-        if y > height - e and x > width - e: return "se"
-        if x < e: return "w"
-        if x > width - e: return "e"
-        if y < e: return "n"
-        if y > height - e: return "s"
-        return None
+    def start_drag(self, event):
+        self.overlay_drag_data = {"x": event.x_root, "y": event.y_root, "win_x": self.overlay_window.winfo_x(), "win_y": self.overlay_window.winfo_y()}
 
-    def update_cursor(self, event):
-        w, h = self.overlay_window.winfo_width(), self.overlay_window.winfo_height()
-        # Adjust y because event is relative to container, but logic assumes window coords?
-        # Actually event.y in container starts after title bar.
-        # Simplification: Resize only works on Bottom/Left/Right edges easily.
-        # Just return default to avoid complexity or offset y by title_bar_height
-        self.overlay_window.config(cursor="arrow") 
+    def do_drag(self, event):
+        dx = event.x_root - self.overlay_drag_data["x"]
+        dy = event.y_root - self.overlay_drag_data["y"]
+        self.overlay_window.geometry(f"+{self.overlay_drag_data['win_x'] + dx}+{self.overlay_drag_data['win_y'] + dy}")
 
-    def start_overlay_drag(self, event):
-        # If clicked on title bar, it's a move.
-        widget = event.widget
-        # If dragging title bar or label inside title bar
-        if widget.master == self.overlay_window or widget.master.master == self.overlay_window:
-             self.overlay_drag_data = {"x": event.x_root - self.overlay_window.winfo_x(), "y": event.y_root - self.overlay_window.winfo_y(), "edge": None}
-        else:
-            # Resize logic (simplified)
-            self.overlay_drag_data = {"x": event.x, "y": event.y, "edge": "se"} # Default to resize corner for simplicity if clicking body
+    def start_resize(self, event):
+        self.overlay_drag_data = {"x": event.x_root, "y": event.y_root, "w": self.overlay_window.winfo_width(), "h": self.overlay_window.winfo_height()}
 
-    def overlay_motion(self, event):
-        if self.overlay_drag_data["edge"] is None:
-            # Moving
-            nx = event.x_root - self.overlay_drag_data["x"]
-            ny = event.y_root - self.overlay_drag_data["y"]
-            self.overlay_window.geometry(f"+{nx}+{ny}")
-        else:
-            # Resizing (Simple SE resize for now to prevent bugs)
-            # Full resizing logic with title bar offset is complex in tkinter without exact event mapping
-            pass
+    def do_resize(self, event):
+        dx = event.x_root - self.overlay_drag_data["x"]
+        dy = event.y_root - self.overlay_drag_data["y"]
+        w = max(100, self.overlay_drag_data["w"] + dx)
+        h = max(100, self.overlay_drag_data["h"] + dy)
+        self.overlay_window.geometry(f"{w}x{h}")
 
     def on_overlay_configure(self, event=None):
         if self.overlay_window:
