@@ -75,6 +75,8 @@ class KarooFarm:
         self.check_items = True
 
         self.dpi_scale = self.get_dpi_scale()
+        self.screen_w = win32api.GetSystemMetrics(0)
+        self.screen_h = win32api.GetSystemMetrics(1)
         
         # Initial Overlay Size
         self.overlay_area = {
@@ -289,6 +291,9 @@ class KarooFarm:
         pynput_keyboard.Listener(on_press=on_press).start()
 
     def click(self, pt, debug_name="Target"):
+        """
+        Uses exact same timing logic as 'cast', but with movement.
+        """
         if not pt: 
             print(f"Skipping {debug_name} - No Coords")
             return
@@ -296,20 +301,27 @@ class KarooFarm:
             x, y = int(pt[0]), int(pt[1])
             print(f"Clicking: {debug_name} at {x},{y}")
             
-            # 1. Move Cursor
-            win32api.SetCursorPos((x, y))
+            # 1. ABSOLUTE MOVEMENT (Safest for games)
+            # Map pixels to 65535 coord space
+            nx = int(x * 65535 / self.screen_w)
+            ny = int(y * 65535 / self.screen_h)
+            win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
             
-            # 2. Force 'Move' Event (Wakes up UI hover states)
-            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 0, 0, 0, 0)
-            time.sleep(0.15) # Wait for hover animation
+            # 2. Wait for hover (important!)
+            time.sleep(0.15) 
             
-            # 3. Press Down
+            # 3. DOWN
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(0.15) # Hold for human-like register
             
-            # 4. Release
+            # 4. LONG HOLD (Like cast)
+            # You said cast works perfectly, so we use a similar meaty hold time.
+            time.sleep(0.4) 
+            
+            # 5. UP
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            time.sleep(0.1) # Post-click recovery
+            
+            # 6. Recovery
+            time.sleep(0.1)
             
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
@@ -320,32 +332,24 @@ class KarooFarm:
                 print("Missing coords for purchase")
                 return
 
-            print("Pressing E")
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
             
-            # Click 'Yes' (Pt 1)
             self.click(self.point_coords[1], "Pt 1 (Yes)")
             time.sleep(self.purchase_click_delay)
             
-            # Click Input Box (Pt 2)
             self.click(self.point_coords[2], "Pt 2 (Input)")
             time.sleep(self.purchase_click_delay)
             
-            # Type Amount
-            print(f"Typing: {self.amount_var.get()}")
             keyboard.write(str(self.amount_var.get()))
             time.sleep(self.purchase_after_type_delay)
             
-            # Click 'Yes' / Confirm (Pt 1)
             self.click(self.point_coords[1], "Pt 1 (Confirm)")
             time.sleep(self.purchase_click_delay)
             
-            # Click Input Box (Pt 2 - extra click safety)
             self.click(self.point_coords[2], "Pt 2 (Safety)")
             time.sleep(self.purchase_click_delay)
             
-            # Click Away / Ocean (Pt 4) to close UI
             self.click(self.point_coords[4], "Pt 4 (Ocean/Exit)")
             time.sleep(self.purchase_click_delay)
             print("--- END AUTO BUY ---")
@@ -359,17 +363,38 @@ class KarooFarm:
         def check_color_match():
             img = self.camera.get_latest_frame()
             if img is None: return False
-            x, y = int(p5[0]), int(p5[1])
-            if y >= img.shape[0] or x >= img.shape[1]: return False
-            b, g, r = img[y, x] # dxcam is BGR
             
-            # 1. Pure White (#FFFFFF) (Tolerance > 240)
-            is_white = (r > 240 and g > 240 and b > 240)
+            target_x, target_y = int(p5[0]), int(p5[1])
             
-            # 2. Green (#2f7807) -> RGB(47, 120, 7) -> BGR(7, 120, 47) (Tolerance 40)
-            is_green = (abs(r - 47) < 40 and abs(g - 120) < 40 and abs(b - 7) < 40)
+            # SEARCH AREA: Check a 5x5 box around the point.
+            # This fixes the issue where clicking 1 pixel off causes failure.
+            found_match = False
+            last_seen_color = (0,0,0)
+
+            for dy in range(-2, 3): # -2 to +2
+                for dx in range(-2, 3):
+                    cy, cx = target_y + dy, target_x + dx
+                    
+                    if 0 <= cy < img.shape[0] and 0 <= cx < img.shape[1]:
+                        b, g, r = img[cy, cx] # BGR
+                        last_seen_color = (r, g, b)
+
+                        # 1. Pure White (#FFFFFF) (Tolerance > 240)
+                        is_white = (r > 240 and g > 240 and b > 240)
+                        
+                        # 2. Green (#2f7807) -> RGB(47, 120, 7)
+                        # Tolerance widened slightly to 45
+                        is_green = (abs(r - 47) < 45 and abs(g - 120) < 45 and abs(b - 7) < 45)
+
+                        if is_white or is_green:
+                            found_match = True
+                            break
+                if found_match: break
             
-            return is_white or is_green
+            if not found_match:
+                print(f"Item Check Fail - Seen at center: {last_seen_color}")
+                
+            return found_match
 
         try:
             keyboard.press_and_release('3')
