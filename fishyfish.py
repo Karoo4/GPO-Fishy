@@ -293,33 +293,49 @@ class KarooFarm:
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
+            # Move cursor first
             win32api.SetCursorPos((x, y))
-            time.sleep(0.05)
-            # CRITICAL: Force game to register movement
-            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 0, 0, 0, 0)
-            time.sleep(0.05)
-            # HOLD CLICK LONGER (0.2s)
+            # Critical delay for game UI to register hover
+            time.sleep(0.1) 
+            # Click
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(0.2) 
+            time.sleep(0.1) 
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             time.sleep(0.1)
-        except: pass
+        except Exception as e: print(f"Click Error: {e}")
 
     def perform_auto_purchase_sequence(self):
         try:
             print("Buying...")
+            # Ensure coordinates exist
+            if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]):
+                print("Missing coords for purchase")
+                return
+
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
+            
+            # Click 'Yes' (Pt 1)
             self.click(self.point_coords[1])
             time.sleep(self.purchase_click_delay)
+            
+            # Click Input Box (Pt 2)
             self.click(self.point_coords[2])
             time.sleep(self.purchase_click_delay)
+            
+            # Type Amount
             keyboard.write(str(self.amount_var.get()))
             time.sleep(self.purchase_after_type_delay)
+            
+            # Click 'Yes' / Confirm (Pt 1)
             self.click(self.point_coords[1])
             time.sleep(self.purchase_click_delay)
+            
+            # Click Input Box (Pt 2 - extra click often needed in some UIs)
             self.click(self.point_coords[2])
             time.sleep(self.purchase_click_delay)
+            
+            # Click Away / Ocean (Pt 4) to close UI
             self.click(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
         except Exception as e: print(f"Purchase Error: {e}")
@@ -328,39 +344,64 @@ class KarooFarm:
         p5 = self.point_coords.get(5)
         if not p5: return
         
-        try:
-            # 1. Baseline Color
-            img1 = self.camera.get_latest_frame()
-            c1 = img1[int(p5[1]), int(p5[0])].tolist() if img1 is not None else [0,0,0]
+        # Helper to check color at Point 5
+        def check_color_match():
+            img = self.camera.get_latest_frame()
+            if img is None: return False
             
-            # 2. Press 3
-            keyboard.press_and_release('3')
-            time.sleep(0.6)
+            # Coordinates for numpy (y, x)
+            x, y = int(p5[0]), int(p5[1])
             
-            # 3. New Color
-            img2 = self.camera.get_latest_frame()
-            c2 = img2[int(p5[1]), int(p5[0])].tolist() if img2 is not None else [0,0,0]
+            # Bounds check
+            if y >= img.shape[0] or x >= img.shape[1]: return False
             
-            # 4. Compare
-            diff = sum([abs(a-b) for a,b in zip(c1, c2)])
+            b, g, r = img[y, x] # dxcam is BGR
             
-            # If no change, slot is empty. Continue loop.
-            if diff < 15: 
-                print("Slot 3 Empty - Resume")
-                return
+            # 1. Pure White (#FFFFFF)
+            # Allow slight darkness/tolerance due to shading (e.g., > 240)
+            is_white = (r > 240 and g > 240 and b > 240)
+            
+            # 2. Green (#2f7807) -> RGB(47, 120, 7) -> BGR(7, 120, 47)
+            # Use tolerance of ~40
+            is_green = (abs(r - 47) < 40 and abs(g - 120) < 40 and abs(b - 7) < 40)
+            
+            return is_white or is_green
 
-            print("Item Found - Cleaning")
-            time.sleep(0.3)
-            self.click(p5)
-            time.sleep(0.5)
-            self.click(p5) # Click again per request
-            time.sleep(0.5)
-            keyboard.press_and_release('backspace')
-            time.sleep(0.5)
-            keyboard.press_and_release('2') # Re-equip rod
-            time.sleep(0.8)
+        try:
+            # 1. Press 3 to equip/check slot
+            keyboard.press_and_release('3')
+            time.sleep(0.6) # Wait for equip animation/UI
             
-        except Exception as e: print(f"Check Error: {e}")
+            # 2. First Color Check
+            if check_color_match():
+                print("Item Detected (White/Green) - Initiating Clean")
+                
+                # Slight delay then Press Point 5
+                time.sleep(0.2)
+                self.click(p5)
+                time.sleep(0.3)
+                
+                # 3. Second Color Check
+                if check_color_match():
+                    # Press Point 5 again
+                    self.click(p5)
+                    time.sleep(0.3)
+                    
+                    # 4. Third Check before deletion
+                    if check_color_match():
+                        # Press Backspace
+                        print("Confirmed. Deleting.")
+                        keyboard.press_and_release('backspace')
+                        time.sleep(0.3)
+            
+            # 5. Always Press 2 to return to Rod
+            keyboard.press_and_release('2')
+            time.sleep(0.8) # Wait for rod equip
+            
+        except Exception as e: 
+            print(f"Check Error: {e}")
+            # Ensure we try to get rod back even if error
+            keyboard.press_and_release('2')
 
     def run_loop(self):
         if self.camera is None: self.camera = dxcam.create(output_color="BGR")
