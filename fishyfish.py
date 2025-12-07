@@ -66,10 +66,10 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # --- DELAYS (Adjusted for Menu Loading) ---
-        self.purchase_delay_after_key = 2.5   # Increased: Wait for shop to fully open
-        self.purchase_click_delay = 1.2       # Increased: Wait for UI animations between clicks
-        self.purchase_after_type_delay = 1.0  # Increased: Wait after typing
+        # --- DELAYS (Increased for reliability) ---
+        self.purchase_delay_after_key = 4.0   # Wait 4s for shop to open
+        self.purchase_click_delay = 2.0       # Wait 2s between clicks
+        self.purchase_after_type_delay = 2.0  # Wait 2s after typing number
         self.clean_step_delay = 0.5           
         
         # Items
@@ -367,51 +367,44 @@ class KarooFarm:
         def is_item_present():
             img = self.camera.get_latest_frame()
             if img is None: return False
-            
-            # Safety bound check
-            if chk_y >= img.shape[0] or chk_x >= img.shape[1]: 
-                print("Error: Hotbar check coords out of bounds!")
-                return False
-            
+            if chk_y >= img.shape[0] or chk_x >= img.shape[1]: return False
             b, g, r = img[chk_y, chk_x] 
-            
-            # Print color for debugging
             print(f"Hotbar Check ({chk_x},{chk_y}): RGB({r},{g},{b})")
-
-            # 1. Black detection (Allow very dark grey)
             is_black = (r < 30 and g < 30 and b < 30)
-            
-            # 2. White detection (Allow bright grey)
             is_white = (r > 200 and g > 200 and b > 200)
-
             return is_black or is_white
 
         try:
+            # 1. Press 3 to start checking slot 3
             keyboard.press_and_release('3')
-            time.sleep(0.6) # Wait for equip
-            
-            # Loop max 3 times for storage attempts
-            item_still_there = False
-            
-            for i in range(3):
-                if is_item_present():
-                    item_still_there = True
-                    print(f"Item detected (Attempt {i+1}). Clicking Pt 5.")
-                    self.click(p5, f"Pt 5 (Clean {i+1})")
+            time.sleep(0.6)
+
+            attempts = 0
+            # Allow up to 2 attempts to store
+            while is_item_present():
+                if attempts < 2:
+                    print(f"Item detected. Storage Attempt {attempts+1}")
+                    # Sequence: Click Pt 5 -> Press 1 -> Press 2 -> Press 3
+                    self.click(p5, "Pt 5 (Store)")
                     time.sleep(self.clean_step_delay)
+                    
+                    keyboard.press_and_release('1')
+                    time.sleep(self.clean_step_delay)
+                    
+                    keyboard.press_and_release('2')
+                    time.sleep(self.clean_step_delay)
+                    
+                    keyboard.press_and_release('3')
+                    time.sleep(0.6) # Wait for equip animation
+                    attempts += 1
                 else:
-                    item_still_there = False
-                    print("Item cleared.")
-                    break
-            
-            # Final Check: If it survived 3 clicks, it's trash.
-            if item_still_there:
-                 # Check one last time to be sure
-                 if is_item_present():
-                    print("Item stuck after 3 tries. Deleting.")
+                    # If we failed twice (Pt 5 pressed twice in a row), DELETE
+                    print("Storage failed twice. Deleting.")
                     keyboard.press_and_release('backspace')
                     time.sleep(self.clean_step_delay)
+                    break 
             
+            # Always return to rod (Press 2)
             keyboard.press_and_release('2')
             time.sleep(0.8)
             
