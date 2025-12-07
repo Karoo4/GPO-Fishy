@@ -66,10 +66,10 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # --- DELAYS ---
+        # --- DELAYS (Significantly Slower) ---
         self.purchase_delay_after_key = 4.0   
         self.purchase_click_delay = 2.0       
-        self.clean_step_delay = 0.5           
+        self.clean_step_delay = 1.5           # Requested 1.5s delay per action
         
         # Items
         self.check_items = True
@@ -327,6 +327,7 @@ class KarooFarm:
                 print("Missing coords for purchase")
                 return
 
+            print("Pressing E to open shop...")
             keyboard.press_and_release('e')
             # Wait for shop UI to open
             time.sleep(self.purchase_delay_after_key)
@@ -375,15 +376,15 @@ class KarooFarm:
         try:
             # 1. Initial Press 3 to start checking slot 3
             keyboard.press_and_release('3')
-            time.sleep(0.6)
+            time.sleep(1.0) # Wait for equip
 
             if not is_item_present():
                 # --- STANDARD SEQUENCE (EMPTY) ---
                 print("Slot 3 Empty.")
                 keyboard.press_and_release('1')
-                time.sleep(0.1)
+                time.sleep(self.clean_step_delay)
                 keyboard.press_and_release('2')
-                time.sleep(0.8)
+                time.sleep(self.clean_step_delay)
                 return
 
             # --- DETECTION SEQUENCE (ITEM FOUND) ---
@@ -396,28 +397,29 @@ class KarooFarm:
             
             # Cleaning Loop: Max 5 seconds
             while time.time() - start_time < 5.0:
+                print("Attempting to Store...")
                 self.click(p5, "Pt 5 (Store attempt)")
-                time.sleep(0.5) # Brief delay for UI update
+                time.sleep(self.clean_step_delay) 
                 
                 if not is_item_present():
                     print("Item Cleared.")
                     cleared = True
                     # Success Sequence: Press 1 -> Press 2
                     keyboard.press_and_release('1')
-                    time.sleep(0.1)
+                    time.sleep(self.clean_step_delay)
                     keyboard.press_and_release('2')
-                    time.sleep(0.8)
+                    time.sleep(self.clean_step_delay)
                     break
                 
-                print("Item still present, retrying click...")
+                print("Item still present, retrying...")
             
             # Fail Safe: Timeout reached
             if not cleared:
                 print("Clean Timeout (5s). Deleting Item.")
                 keyboard.press_and_release('backspace')
-                time.sleep(0.5)
+                time.sleep(self.clean_step_delay)
                 keyboard.press_and_release('2')
-                time.sleep(0.8)
+                time.sleep(self.clean_step_delay)
             
         except Exception as e: 
             print(f"Check Error: {e}")
