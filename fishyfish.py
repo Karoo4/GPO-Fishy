@@ -53,7 +53,8 @@ class KarooFarm:
         self.is_clicking = False
         self.recording_hotkey = None
         
-        # --- CRITICAL FIX: SAFETY LOCK VARIABLE ---
+        # --- NEW FLAGS ---
+        self.is_performing_action = False # Locks detection while buying/storing
         self.last_cast_time = 0.0
         
         # Overlay Logic State
@@ -286,6 +287,7 @@ class KarooFarm:
         else:
             self.loop_status.config(text="Main Loop: OFF", fg="red")
             self.is_clicking = False
+            self.is_performing_action = False
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             
             # SHOW OVERLAY AGAIN
@@ -314,6 +316,19 @@ class KarooFarm:
             return False
         pynput_keyboard.Listener(on_press=on_press).start()
 
+    # --- MOUSE HELPERS ---
+    def move_to(self, pt):
+        """Moves the mouse to coordinates WITHOUT clicking."""
+        if not pt: return
+        try:
+            x, y = int(pt[0]), int(pt[1])
+            win32api.SetCursorPos((x, y))
+            time.sleep(0.02)
+            # Force Relative Move to wake up game camera/cursor logic
+            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0)
+            time.sleep(0.05)
+        except Exception: pass
+
     def click(self, pt, debug_name="Target", hold_time=0.1):
         if not pt: 
             print(f"Skipping {debug_name} - No Coords")
@@ -340,6 +355,8 @@ class KarooFarm:
     def perform_auto_purchase_sequence(self):
         try:
             print("--- START AUTO BUY ---")
+            self.is_performing_action = True # BLOCK CASTING
+            
             if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]):
                 print("Missing coords for purchase")
                 return
@@ -363,11 +380,15 @@ class KarooFarm:
             self.click(self.point_coords[2], "Pt 2 (Safety)")
             time.sleep(self.purchase_click_delay)
             
-            self.click(self.point_coords[4], "Pt 4 (Ocean/Exit)")
+            # JUST MOVE to Ocean, don't click yet. Let cast() handle the clicking later.
+            self.move_to(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
+            
             print("--- END AUTO BUY ---")
             
         except Exception as e: print(f"Purchase Error: {e}")
+        finally:
+            self.is_performing_action = False # UNBLOCK CASTING
 
     def perform_store_fruit(self):
         p5 = self.point_coords.get(5)
@@ -382,17 +403,15 @@ class KarooFarm:
             if chk_y >= img.shape[0] or chk_x >= img.shape[1]: return False
             
             b, g, r = img[chk_y, chk_x] # BGR format
-            
-            # Check for #ff6666 (R:255, G:102, B:102) with tolerance
-            # R should be high (>230), G and B should be mid (70-130)
             match_r = r > 230
             match_g = 70 < g < 130
             match_b = 70 < b < 130
-            
             return match_r and match_g and match_b
 
         try:
             print("--- AUTO STORE SEQUENCE ---")
+            self.is_performing_action = True # BLOCK CASTING
+
             # 1. Equip potential fruit
             keyboard.press_and_release('3')
             time.sleep(self.clean_step_delay)
@@ -409,21 +428,31 @@ class KarooFarm:
             else:
                 print("Fruit Stored (or Empty/No Warning).")
 
-            # 4. Reset to Fists -> Rod
+            # 4. RESET EQUIPMENT (CRITICAL FIX FOR ROD)
+            # Switch to '1' first (Combat/Fist) to clear hands
             keyboard.press_and_release('1')
             time.sleep(self.clean_step_delay)
+            
+            # Switch to '2' (Rod). Since we are on '1', pressing '2' GUARANTEES equip.
             keyboard.press_and_release('2')
             time.sleep(self.clean_step_delay)
             
-            # 5. Reset mouse to Ocean (Pt 4)
-            self.click(self.point_coords[4], "Pt 4 (Reset)")
+            # 5. Reset mouse to Ocean (Pt 4) WITHOUT CLICKING
+            # Use move_to instead of click. Cast() will handle clicking later.
+            self.move_to(self.point_coords[4])
             time.sleep(self.clean_step_delay)
             
         except Exception as e: 
             print(f"Store Error: {e}")
+            keyboard.press_and_release('1')
+            time.sleep(0.5)
             keyboard.press_and_release('2')
+        finally:
+            self.is_performing_action = False # UNBLOCK CASTING
 
     def cast(self):
+        if self.is_performing_action: return # Double check
+        
         # Cast uses a long hold (1.0s)
         self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
         self.is_clicking = False
@@ -435,7 +464,6 @@ class KarooFarm:
         if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
         
         self.previous_error = 0
-        # No big sleep needed here anymore because we have the safety lock in the main loop
         time.sleep(0.5)
 
     def run_loop(self):
@@ -450,14 +478,19 @@ class KarooFarm:
         self.camera.start(target_fps=60, video_mode=True)
 
         try:
+            # Initial Sequence
             if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
-
             self.cast()
             
             last_detection_time = time.time()
             was_detecting = False
 
             while self.main_loop_active:
+                # --- NEW INTERFERENCE CHECK ---
+                if self.is_performing_action:
+                    time.sleep(0.1)
+                    continue
+
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 width, height = self.overlay_area['width'], self.overlay_area['height']
 
@@ -493,12 +526,17 @@ class KarooFarm:
                         self.is_clicking = False
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         
+                        # LOGIC AFTER CATCH
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
                                 self.perform_auto_purchase_sequence()
                                 self.purchase_counter = 0
-                        if self.item_check_var.get(): self.perform_store_fruit()
+                        
+                        if self.item_check_var.get(): 
+                            self.perform_store_fruit()
+                        
+                        # CAST IS DECISIVE: Only cast here, after everything else is done.
                         self.cast()
                         last_detection_time = time.time()
                         
@@ -626,8 +664,6 @@ class KarooFarm:
                     pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
                     
                     # === CRITICAL SAFETY CHECK ===
-                    # If we cast less than 3 seconds ago, WE REFUSE TO CLICK.
-                    # This guarantees the "reel in" cannot happen.
                     time_since_cast = time.time() - self.last_cast_time
                     
                     if pd_output > 0:
