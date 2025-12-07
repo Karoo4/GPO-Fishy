@@ -66,8 +66,8 @@ class KarooFarm:
         self.win_start_h = 0
         
         # Overlay Config
-        self.border_size = 10     
-        self.title_size = 30      
+        self.border_size = 5      
+        self.title_size = 0       
         
         # Logic Config
         self.purchase_counter = 0     
@@ -80,8 +80,8 @@ class KarooFarm:
         
         # --- DELAYS ---
         self.purchase_delay_after_key = 2.0   
-        self.purchase_click_delay = 1.0       
-        self.purchase_after_type_delay = 1.0
+        self.purchase_click_delay = 0.8       
+        self.purchase_after_type_delay = 0.8
         self.clean_step_delay = 1.5           
         
         # Items
@@ -263,6 +263,7 @@ class KarooFarm:
     def toggle_loop(self):
         self.main_loop_active = not self.main_loop_active
         if self.main_loop_active:
+            # Check requirements
             req = []
             if self.auto_purchase_var.get(): req.extend([1,2,4])
             if self.item_check_var.get(): req.append(5)
@@ -273,11 +274,20 @@ class KarooFarm:
             
             self.purchase_counter = 0
             self.loop_status.config(text="Main Loop: ON", fg="#00ff00")
+            
+            # HIDE OVERLAY SO BOT CAN SEE
+            if self.overlay_window:
+                self.overlay_window.withdraw()
+                
             threading.Thread(target=self.run_loop, daemon=True).start()
         else:
             self.loop_status.config(text="Main Loop: OFF", fg="red")
             self.is_clicking = False
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            
+            # SHOW OVERLAY AGAIN
+            if self.overlay_window:
+                self.overlay_window.deiconify()
 
     def capture_pt(self, idx):
         self.status_msg.config(text=f"Click for Pt {idx}...", fg=THEME_ACCENT)
@@ -402,6 +412,10 @@ class KarooFarm:
             keyboard.press_and_release('2')
             time.sleep(self.clean_step_delay)
             
+            # 5. Reset mouse to Ocean (Pt 4)
+            self.click(self.point_coords[4], "Pt 4 (Reset)")
+            time.sleep(self.clean_step_delay)
+            
         except Exception as e: 
             print(f"Store Error: {e}")
             keyboard.press_and_release('2')
@@ -421,10 +435,11 @@ class KarooFarm:
                 ox, oy = self.overlay_area['x'], self.overlay_area['y']
                 ow, oh = self.overlay_area['width'], self.overlay_area['height']
                 
-                scan_x = ox + self.border_size
-                scan_y = oy + self.title_size
-                scan_w = ow - (self.border_size * 2)
-                scan_h = oh - self.title_size - self.border_size
+                # NO OFFSET: Scan exactly where the box is
+                scan_x = ox
+                scan_y = oy
+                scan_w = ow
+                scan_h = oh
                 
                 if scan_w < 10 or scan_h < 10: time.sleep(0.1); continue
                 
