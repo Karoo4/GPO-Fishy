@@ -38,7 +38,7 @@ class KarooFarm:
     def __init__(self, root):
         self.root = root
         self.root.title("Karoo Farm")
-        self.root.geometry("450x850")
+        self.root.geometry("450x900") # Slightly taller for new option
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
 
@@ -53,8 +53,8 @@ class KarooFarm:
         self.is_clicking = False
         self.recording_hotkey = None
         
-        # --- NEW FLAGS ---
-        self.is_performing_action = False # Locks detection while buying/storing
+        # --- FLAGS ---
+        self.is_performing_action = False # Locks detection while buying/storing/baiting
         self.last_cast_time = 0.0
         
         # Overlay Logic State
@@ -102,7 +102,9 @@ class KarooFarm:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         self.camera = None
-        self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None}
+        
+        # Added Pt 6 for Bait
+        self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None}
         self.point_labels = {} 
 
         # Images
@@ -120,7 +122,7 @@ class KarooFarm:
         try:
             response = requests.get(url, timeout=5)
             img = Image.open(BytesIO(response.content))
-            img = img.resize((500, 900), Image.Resampling.LANCZOS)
+            img = img.resize((500, 950), Image.Resampling.LANCZOS)
             return ImageTk.PhotoImage(ImageEnhance.Brightness(img).enhance(darkness))
         except: return None
 
@@ -178,6 +180,12 @@ class KarooFarm:
         self.item_check_var = tk.BooleanVar(value=True)
         self.create_toggle(frame, "Enable Auto Store", self.item_check_var)
         self.create_point_row(frame, 5, "Pt 5 (Store Button)")
+
+        # Auto Bait
+        self.create_section(frame, "Auto Bait")
+        self.auto_bait_var = tk.BooleanVar(value=False)
+        self.create_toggle(frame, "Enable Auto Bait", self.auto_bait_var)
+        self.create_point_row(frame, 6, "Pt 6 (Bait Location)")
 
         # Settings
         self.create_section(frame, "Settings")
@@ -271,6 +279,8 @@ class KarooFarm:
             req = []
             if self.auto_purchase_var.get(): req.extend([1,2,4])
             if self.item_check_var.get(): req.append(5)
+            if self.auto_bait_var.get(): req.append(6) # Require Bait Point
+            
             if any(not self.point_coords.get(p) for p in req):
                 self.main_loop_active = False
                 self.status_msg.config(text="Missing Points!", fg="red")
@@ -352,6 +362,8 @@ class KarooFarm:
             time.sleep(0.05)
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
+    # --- ACTIONS ---
+
     def perform_auto_purchase_sequence(self):
         try:
             print("--- START AUTO BUY ---")
@@ -380,7 +392,7 @@ class KarooFarm:
             self.click(self.point_coords[2], "Pt 2 (Safety)")
             time.sleep(self.purchase_click_delay)
             
-            # JUST MOVE to Ocean, don't click yet. Let cast() handle the clicking later.
+            # JUST MOVE to Ocean, don't click yet.
             self.move_to(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
             
@@ -433,12 +445,11 @@ class KarooFarm:
             keyboard.press_and_release('1')
             time.sleep(self.clean_step_delay)
             
-            # Switch to '2' (Rod). Since we are on '1', pressing '2' GUARANTEES equip.
+            # Switch to '2' (Rod).
             keyboard.press_and_release('2')
             time.sleep(self.clean_step_delay)
             
             # 5. Reset mouse to Ocean (Pt 4) WITHOUT CLICKING
-            # Use move_to instead of click. Cast() will handle clicking later.
             self.move_to(self.point_coords[4])
             time.sleep(self.clean_step_delay)
             
@@ -449,6 +460,31 @@ class KarooFarm:
             keyboard.press_and_release('2')
         finally:
             self.is_performing_action = False # UNBLOCK CASTING
+
+    def perform_bait_select(self):
+        # Only run if enabled
+        if not self.auto_bait_var.get(): return
+        
+        p6 = self.point_coords.get(6)
+        if not p6: return
+
+        try:
+            print("--- AUTO BAIT SELECT ---")
+            self.is_performing_action = True # Block casting
+            
+            # 1. Click the Bait Location
+            self.click(p6, "Pt 6 (Bait Select)")
+            time.sleep(0.5) # Short wait for UI register
+            
+            # 2. Move Cursor back to Ocean (Pt 4)
+            self.move_to(self.point_coords[4])
+            time.sleep(0.2)
+            
+            print("--- BAIT SELECTED ---")
+        except Exception as e:
+            print(f"Bait Error: {e}")
+        finally:
+            self.is_performing_action = False # Unblock
 
     def cast(self):
         if self.is_performing_action: return # Double check
@@ -486,7 +522,7 @@ class KarooFarm:
             was_detecting = False
 
             while self.main_loop_active:
-                # --- NEW INTERFERENCE CHECK ---
+                # --- INTERFERENCE CHECK ---
                 if self.is_performing_action:
                     time.sleep(0.1)
                     continue
@@ -526,23 +562,31 @@ class KarooFarm:
                         self.is_clicking = False
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         
-                        # LOGIC AFTER CATCH
+                        # --- POST-GAME LOGIC ---
+                        
+                        # 1. Purchase
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
                                 self.perform_auto_purchase_sequence()
                                 self.purchase_counter = 0
                         
+                        # 2. Store Fruit
                         if self.item_check_var.get(): 
                             self.perform_store_fruit()
+                            
+                        # 3. Auto Bait (NEW)
+                        if self.auto_bait_var.get():
+                            self.perform_bait_select()
                         
-                        # CAST IS DECISIVE: Only cast here, after everything else is done.
+                        # 4. Final Cast
                         self.cast()
                         last_detection_time = time.time()
                         
                     elif current_time - last_detection_time > self.scan_timeout:
                         print("Timeout. Recasting...")
                         if self.item_check_var.get(): self.perform_store_fruit()
+                        if self.auto_bait_var.get(): self.perform_bait_select()
                         self.cast()
                         last_detection_time = time.time()
                     
