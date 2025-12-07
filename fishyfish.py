@@ -36,7 +36,7 @@ VIVI_URL = "https://static0.srcdn.com/wordpress/wp-content/uploads/2023/10/vivi.
 DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2FX8YUuU7OpOA%2Fmaxresdefault.jpg&f=1&nofb=1&ipt=6d669298669fff2e4f438b54453c1f59c1655ca19fa2407ea1c42e471a4d7ab6"
 TITLE_LOGO_URL = "https://image2url.com/images/1765149562249-ff56b103-b5ea-4402-a896-0ed38202b804.png"
 
-class KarooFarm:
+class KarooFish:
     def __init__(self, root):
         self.root = root
         self.root.title("Karoo Fish")
@@ -829,7 +829,7 @@ class KarooFarm:
             'left': x < edge,
             'right': x > w - edge,
             'top': y < edge,
-            'bottom': y < h - edge
+            'bottom': y > h - edge
         }
         
         if any(self.resize_edge.values()):
@@ -887,6 +887,6 @@ class KarooFarm:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = KarooFarm(root)
+    app = KarooFish(root)
     root.protocol("WM_DELETE_WINDOW", app.exit_app)
     root.mainloop()
