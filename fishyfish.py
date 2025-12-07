@@ -20,6 +20,7 @@ THEME_ACCENT = "#ff8d00" # Orange
 FONT_MAIN = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 11, "bold")
 FONT_TITLE = ("Segoe UI", 20, "bold")
+FONT_AFK = ("Segoe UI", 48, "bold")  # <--- FIXED: Added this back
 
 VIVI_URL = "https://static0.srcdn.com/wordpress/wp-content/uploads/2023/10/vivi.jpg?q=49&fit=crop&w=825&dpr=2"
 DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2FX8YUuU7OpOA%2Fmaxresdefault.jpg&f=1&nofb=1&ipt=6d669298669fff2e4f438b54453c1f59c1655ca19fa2407ea1c42e471a4d7ab6"
@@ -341,9 +342,6 @@ class KarooFarm:
                 ow, oh = self.overlay_area['width'], self.overlay_area['height']
                 
                 # CRITICAL: Offset capture area to ignore the overlay borders
-                # The overlay has a 30px top bar and 10px side borders
-                # We crop INSIDE that
-                
                 scan_x = ox + self.border_size
                 scan_y = oy + self.title_size
                 scan_w = ow - (self.border_size * 2)
