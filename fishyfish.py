@@ -53,6 +53,18 @@ class KarooFarm:
         self.is_clicking = False
         self.recording_hotkey = None
         
+        # Overlay Logic State
+        self.resize_threshold = 10
+        self.dragging = False
+        self.resizing = False
+        self.resize_edge = None
+        self.start_x = 0
+        self.start_y = 0
+        self.win_start_x = 0
+        self.win_start_y = 0
+        self.win_start_w = 0
+        self.win_start_h = 0
+        
         # Overlay Config
         self.border_size = 10     
         self.title_size = 30      
@@ -66,12 +78,10 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # --- DELAYS (Based on functional HotkeyGUI) ---
+        # --- DELAYS (Stable) ---
         self.purchase_delay_after_key = 2.0   
         self.purchase_click_delay = 1.0       
         self.purchase_after_type_delay = 1.0
-        
-        # Item Clean Delay (Slower/Safe)
         self.clean_step_delay = 1.5           
         
         # Items
@@ -292,38 +302,26 @@ class KarooFarm:
         pynput_keyboard.Listener(on_press=on_press).start()
 
     def click(self, pt, debug_name="Target", hold_time=0.1):
-        """
-        Robust Clicker: Moves cursor, performs a 1-pixel 'wiggle' to alert 
-        the game engine, then clicks.
-        """
         if not pt: 
             print(f"Skipping {debug_name} - No Coords")
             return
         try:
             x, y = int(pt[0]), int(pt[1])
             print(f"Clicking: {debug_name} at {x},{y}")
-            
-            # 1. Move System Cursor
+            # 1. Move
             win32api.SetCursorPos((x, y))
             time.sleep(0.02)
-            
-            # 2. Force Relative Move (Critical for games like Roblox)
-            # This '1, 1' delta proves to the engine the mouse moved.
+            # 2. Force Relative Move
             win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0)
             time.sleep(0.05)
-            
             # 3. Down
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            
             # 4. Hold
             time.sleep(hold_time) 
-            
             # 5. Up
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            
             # 6. Recovery
             time.sleep(0.05)
-            
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
     def perform_auto_purchase_sequence(self):
@@ -349,7 +347,7 @@ class KarooFarm:
             self.click(self.point_coords[1], "Pt 1 (Confirm)")
             time.sleep(self.purchase_click_delay)
             
-            self.click(self.point_coords[2], "Pt 2 (Safety/Input)")
+            self.click(self.point_coords[2], "Pt 2 (Safety)")
             time.sleep(self.purchase_click_delay)
             
             self.click(self.point_coords[4], "Pt 4 (Ocean/Exit)")
@@ -362,7 +360,6 @@ class KarooFarm:
         p5 = self.point_coords.get(5)
         if not p5: return
         
-        # Hardcoded check coords
         chk_x, chk_y = 1280, 1385
 
         def is_item_present():
@@ -376,9 +373,9 @@ class KarooFarm:
             return is_black or is_white
 
         try:
-            # 1. Initial Press 3 to start checking slot 3
+            # 1. Initial Press 3
             keyboard.press_and_release('3')
-            time.sleep(1.0) # Wait for equip
+            time.sleep(1.0) 
 
             if not is_item_present():
                 # --- STANDARD SEQUENCE (EMPTY) ---
@@ -391,8 +388,8 @@ class KarooFarm:
 
             # --- DETECTION SEQUENCE (ITEM FOUND) ---
             print("Item Found! Initiating Clean Protocol.")
-            keyboard.press_and_release('3') # Press 3 again as requested
-            time.sleep(2.0) # Requested Wait
+            keyboard.press_and_release('3') 
+            time.sleep(2.0) 
 
             start_time = time.time()
             cleared = False
@@ -415,7 +412,7 @@ class KarooFarm:
                 
                 print("Item still present, retrying...")
             
-            # Fail Safe: Timeout reached
+            # Fail Safe
             if not cleared:
                 print("Clean Timeout (5s). Deleting Item.")
                 keyboard.press_and_release('backspace')
@@ -565,13 +562,12 @@ class KarooFarm:
             if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     def cast(self):
-        # Cast uses a long hold (1.0s)
         self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
         self.is_clicking = False
         self.total_loops_count += 1
         if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
 
-    # --- OVERLAY ---
+    # --- OVERLAY LOGIC (REPLACED) ---
     def toggle_overlay(self):
         self.overlay_active = not self.overlay_active
         if self.overlay_active:
@@ -586,64 +582,122 @@ class KarooFarm:
         self.overlay_window = tk.Toplevel(self.root)
         self.overlay_window.overrideredirect(True)
         self.overlay_window.attributes('-topmost', True)
+        # We need alpha to allow events, but we want transparency.
+        # This setup (magenta transparent + alpha 0.8) keeps the box visible but hollow.
         self.overlay_window.attributes('-alpha', 0.8)
         self.overlay_window.wm_attributes("-transparentcolor", "magenta")
         
+        # Restore position
         self.overlay_window.geometry(f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}")
         
-        bg = tk.Frame(self.overlay_window, bg="magenta")
-        bg.pack(fill="both", expand=True)
-        
-        # 1. Title (Drag)
-        bar = tk.Frame(bg, bg=THEME_ACCENT, height=self.title_size, cursor="fleur")
-        bar.pack(side="top", fill="x")
-        
-        # 2. Borders (Resize)
-        bot = tk.Frame(bg, bg=THEME_ACCENT, height=self.border_size, cursor="sb_v_double_arrow")
-        bot.pack(side="bottom", fill="x")
-        
-        left = tk.Frame(bg, bg=THEME_ACCENT, width=self.border_size, cursor="sb_h_double_arrow")
-        left.pack(side="left", fill="y")
-        
-        right = tk.Frame(bg, bg=THEME_ACCENT, width=self.border_size, cursor="sb_h_double_arrow")
-        right.pack(side="right", fill="y")
+        # IMPORTANT: The background must be the transparent color
+        self.overlay_window.configure(bg='magenta')
 
-        # Bindings
-        self.drag_data = {"x": 0, "y": 0}
+        # Create canvas for border
+        self.canvas = tk.Canvas(self.overlay_window, bg='magenta', 
+                                highlightthickness=self.border_size, 
+                                highlightbackground=THEME_ACCENT)
+        self.canvas.pack(fill='both', expand=True)
+
+        # Bind events for the Advanced Resizable Logic
+        self.canvas.bind('<Button-1>', self.on_mouse_down)
+        self.canvas.bind('<B1-Motion>', self.on_mouse_drag)
+        self.canvas.bind('<ButtonRelease-1>', self.on_mouse_up)
+        self.canvas.bind('<Motion>', self.on_mouse_move)
         
-        bar.bind("<ButtonPress-1>", self.start_move)
-        bar.bind("<B1-Motion>", self.do_move)
+        # State vars for resize
+        self.resizing = False
+        self.dragging = False
+        self.resize_edge = None
+        self.start_x = 0
+        self.start_y = 0
+
+    def on_mouse_move(self, event):
+        x, y = event.x, event.y
+        w = self.overlay_window.winfo_width()
+        h = self.overlay_window.winfo_height()
         
-        right.bind("<ButtonPress-1>", self.start_resize)
-        right.bind("<B1-Motion>", lambda e: self.do_resize(e, "x"))
-        bot.bind("<ButtonPress-1>", self.start_resize)
-        bot.bind("<B1-Motion>", lambda e: self.do_resize(e, "y"))
+        edge = 15 # Sensitive area
         
-        self.overlay_window.bind("<Configure>", self.save_geo)
+        left = x < edge
+        right = x > w - edge
+        top = y < edge
+        bottom = y > h - edge
+        
+        if top and left: self.canvas.config(cursor='top_left_corner')
+        elif top and right: self.canvas.config(cursor='top_right_corner')
+        elif bottom and left: self.canvas.config(cursor='bottom_left_corner')
+        elif bottom and right: self.canvas.config(cursor='bottom_right_corner')
+        elif left: self.canvas.config(cursor='sb_h_double_arrow')
+        elif right: self.canvas.config(cursor='sb_h_double_arrow')
+        elif top: self.canvas.config(cursor='sb_v_double_arrow')
+        elif bottom: self.canvas.config(cursor='sb_v_double_arrow')
+        else: self.canvas.config(cursor='fleur')
 
-    def start_move(self, e):
-        self.drag_data = {"x": e.x_root, "y": e.y_root, "wx": self.overlay_window.winfo_x(), "wy": self.overlay_window.winfo_y()}
+    def on_mouse_down(self, event):
+        self.start_x = event.x_root
+        self.start_y = event.y_root
+        self.win_start_x = self.overlay_window.winfo_x()
+        self.win_start_y = self.overlay_window.winfo_y()
+        self.win_start_w = self.overlay_window.winfo_width()
+        self.win_start_h = self.overlay_window.winfo_height()
+        
+        x, y = event.x, event.y
+        w, h = self.win_start_w, self.win_start_h
+        edge = 15
+        
+        self.resize_edge = {
+            'left': x < edge,
+            'right': x > w - edge,
+            'top': y < edge,
+            'bottom': y > h - edge
+        }
+        
+        if any(self.resize_edge.values()):
+            self.resizing = True
+        else:
+            self.dragging = True
 
-    def do_move(self, e):
-        dx = e.x_root - self.drag_data["x"]
-        dy = e.y_root - self.drag_data["y"]
-        self.overlay_window.geometry(f"+{self.drag_data['wx']+dx}+{self.drag_data['wy']+dy}")
+    def on_mouse_drag(self, event):
+        dx = event.x_root - self.start_x
+        dy = event.y_root - self.start_y
+        
+        if self.dragging:
+            nx = self.win_start_x + dx
+            ny = self.win_start_y + dy
+            self.overlay_window.geometry(f"+{nx}+{ny}")
+            self.save_geo()
+            
+        elif self.resizing:
+            nx, ny, nw, nh = self.win_start_x, self.win_start_y, self.win_start_w, self.win_start_h
+            
+            if self.resize_edge['right']: nw += dx
+            if self.resize_edge['bottom']: nh += dy
+            if self.resize_edge['left']:
+                nx += dx
+                nw -= dx
+            if self.resize_edge['top']:
+                ny += dy
+                nh -= dy
+                
+            nw = max(50, nw)
+            nh = max(50, nh)
+            self.overlay_window.geometry(f"{nw}x{nh}+{nx}+{ny}")
+            self.save_geo()
 
-    def start_resize(self, e):
-        self.drag_data = {"x": e.x_root, "y": e.y_root, "w": self.overlay_window.winfo_width(), "h": self.overlay_window.winfo_height()}
+    def on_mouse_up(self, event):
+        self.dragging = False
+        self.resizing = False
+        self.save_geo()
 
-    def do_resize(self, e, axis):
-        dx = e.x_root - self.drag_data["x"]
-        dy = e.y_root - self.drag_data["y"]
-        w, h = self.drag_data["w"], self.drag_data["h"]
-        if axis == "x": w += dx
-        if axis == "y": h += dy
-        self.overlay_window.geometry(f"{max(50, w)}x{max(50, h)}")
-
-    def save_geo(self, e):
+    def save_geo(self):
         if self.overlay_window:
-            self.overlay_area = {'x': self.overlay_window.winfo_x(), 'y': self.overlay_window.winfo_y(), 
-                                 'width': self.overlay_window.winfo_width(), 'height': self.overlay_window.winfo_height()}
+            self.overlay_area = {
+                'x': self.overlay_window.winfo_x(),
+                'y': self.overlay_window.winfo_y(), 
+                'width': self.overlay_window.winfo_width(), 
+                'height': self.overlay_window.winfo_height()
+            }
 
     def destroy_overlay(self):
         if self.overlay_window: self.overlay_window.destroy(); self.overlay_window = None
