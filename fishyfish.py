@@ -66,10 +66,11 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # Delays
-        self.purchase_delay_after_key = 2.0
-        self.purchase_click_delay = 0.8
-        self.purchase_after_type_delay = 0.8
+        # --- DELAYS (Faster now) ---
+        self.purchase_delay_after_key = 1.5   # Wait for shop to open
+        self.purchase_click_delay = 0.5       # Delay between UI clicks (was 0.8)
+        self.purchase_after_type_delay = 0.5  # Delay after typing number
+        self.clean_step_delay = 0.4           # Delay between clean clicks
         
         # Items
         self.check_items = True
@@ -290,9 +291,10 @@ class KarooFarm:
             return False
         pynput_keyboard.Listener(on_press=on_press).start()
 
-    def click(self, pt, debug_name="Target"):
+    def click(self, pt, debug_name="Target", hold_time=0.05):
         """
-        Uses exact same timing logic as 'cast', but with movement.
+        Fast clicking with absolute movement. 
+        hold_time: 0.05 for UI, 1.0 for Rod Cast.
         """
         if not pt: 
             print(f"Skipping {debug_name} - No Coords")
@@ -301,27 +303,25 @@ class KarooFarm:
             x, y = int(pt[0]), int(pt[1])
             print(f"Clicking: {debug_name} at {x},{y}")
             
-            # 1. ABSOLUTE MOVEMENT (Safest for games)
-            # Map pixels to 65535 coord space
+            # 1. ABSOLUTE MOVEMENT
             nx = int(x * 65535 / self.screen_w)
             ny = int(y * 65535 / self.screen_h)
             win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
             
-            # 2. Wait for hover (important!)
-            time.sleep(0.15) 
+            # 2. Short Hover
+            time.sleep(0.08) 
             
             # 3. DOWN
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
             
-            # 4. LONG HOLD (Like cast)
-            # You said cast works perfectly, so we use a similar meaty hold time.
-            time.sleep(0.4) 
+            # 4. HOLD (Configurable)
+            time.sleep(hold_time) 
             
             # 5. UP
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             
             # 6. Recovery
-            time.sleep(0.1)
+            time.sleep(0.05)
             
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
@@ -365,55 +365,55 @@ class KarooFarm:
             if img is None: return False
             
             target_x, target_y = int(p5[0]), int(p5[1])
-            
-            # SEARCH AREA: Check a 5x5 box around the point.
-            # This fixes the issue where clicking 1 pixel off causes failure.
             found_match = False
-            last_seen_color = (0,0,0)
 
-            for dy in range(-2, 3): # -2 to +2
+            # Search 5x5 area
+            for dy in range(-2, 3): 
                 for dx in range(-2, 3):
                     cy, cx = target_y + dy, target_x + dx
-                    
                     if 0 <= cy < img.shape[0] and 0 <= cx < img.shape[1]:
-                        b, g, r = img[cy, cx] # BGR
-                        last_seen_color = (r, g, b)
+                        b, g, r = img[cy, cx] 
 
-                        # 1. Pure White (#FFFFFF) (Tolerance > 240)
-                        is_white = (r > 240 and g > 240 and b > 240)
+                        # Tolerances widened significantly to catch "close to" colors
+                        # 1. White-ish (Allow light gray)
+                        is_white = (r > 220 and g > 220 and b > 220)
                         
-                        # 2. Green (#2f7807) -> RGB(47, 120, 7)
-                        # Tolerance widened slightly to 45
-                        is_green = (abs(r - 47) < 45 and abs(g - 120) < 45 and abs(b - 7) < 45)
+                        # 2. Green-ish 
+                        # Target: R:47 G:120 B:7. 
+                        # Tolerance: 60 (Very wide)
+                        is_green = (abs(r - 47) < 60 and abs(g - 120) < 60 and abs(b - 7) < 60)
 
                         if is_white or is_green:
                             found_match = True
                             break
                 if found_match: break
             
-            if not found_match:
-                print(f"Item Check Fail - Seen at center: {last_seen_color}")
-                
             return found_match
 
         try:
             keyboard.press_and_release('3')
-            time.sleep(0.6)
+            time.sleep(0.6) # Wait for equip
             
+            # If ANY match found, start cleaning process
             if check_color_match():
                 print("Item Detected (White/Green) - Initiating Clean")
                 time.sleep(0.2)
-                self.click(p5, "Pt 5 (Clean 1)")
-                time.sleep(0.3)
                 
+                # First Click
+                self.click(p5, "Pt 5 (Clean 1)")
+                time.sleep(self.clean_step_delay)
+                
+                # Verify match still exists (Safety)
                 if check_color_match():
+                    # Second Click
                     self.click(p5, "Pt 5 (Clean 2)")
-                    time.sleep(0.3)
+                    time.sleep(self.clean_step_delay)
                     
+                    # Final Verification
                     if check_color_match():
                         print("Confirmed. Deleting.")
                         keyboard.press_and_release('backspace')
-                        time.sleep(0.3)
+                        time.sleep(self.clean_step_delay)
             
             keyboard.press_and_release('2')
             time.sleep(0.8)
@@ -560,9 +560,8 @@ class KarooFarm:
             if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
     def cast(self):
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-        time.sleep(1.0)
-        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+        # Cast uses a long hold (1.0s)
+        self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
         self.is_clicking = False
         self.total_loops_count += 1
         if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
