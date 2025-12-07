@@ -20,7 +20,7 @@ THEME_ACCENT = "#ff8d00" # Orange
 FONT_MAIN = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 11, "bold")
 FONT_TITLE = ("Segoe UI", 20, "bold")
-FONT_AFK = ("Segoe UI", 48, "bold")  # <--- FIXED: Added this back
+FONT_AFK = ("Segoe UI", 48, "bold")
 
 VIVI_URL = "https://static0.srcdn.com/wordpress/wp-content/uploads/2023/10/vivi.jpg?q=49&fit=crop&w=825&dpr=2"
 DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2FX8YUuU7OpOA%2Fmaxresdefault.jpg&f=1&nofb=1&ipt=6d669298669fff2e4f438b54453c1f59c1655ca19fa2407ea1c42e471a4d7ab6"
@@ -45,8 +45,8 @@ class KarooFarm:
         self.recording_hotkey = None
         
         # Overlay Config
-        self.border_size = 10     # Thick border for resizing
-        self.title_size = 30      # Thick bar for dragging
+        self.border_size = 10     
+        self.title_size = 30      
         
         # Logic Config
         self.purchase_counter = 0     
@@ -57,10 +57,10 @@ class KarooFarm:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # Auto Buy Timing
-        self.purchase_delay_after_key = 2.0
-        self.purchase_click_delay = 0.8
-        self.purchase_after_type_delay = 0.8
+        # Delays (Slightly increased for stability)
+        self.purchase_delay_after_key = 2.5
+        self.purchase_click_delay = 1.0
+        self.purchase_after_type_delay = 1.0
         
         # Items
         self.check_items = True
@@ -287,13 +287,14 @@ class KarooFarm:
         try:
             x, y = int(pt[0]), int(pt[1])
             win32api.SetCursorPos((x, y))
-            time.sleep(0.05)
+            time.sleep(0.1)
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(0.05)
+            time.sleep(0.1) # HOLD for 0.1s to register
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            time.sleep(0.1)
         except: pass
 
-    def do_purchase(self):
+    def perform_auto_purchase_sequence(self):
         try:
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
@@ -305,22 +306,23 @@ class KarooFarm:
             time.sleep(self.purchase_after_type_delay)
             self.click(self.point_coords[1])
             time.sleep(self.purchase_click_delay)
-            self.click(self.point_coords[2]) # Seq requested: Input again?
+            self.click(self.point_coords[2]) # Input again (Seq)
             time.sleep(self.purchase_click_delay)
             self.click(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
-        except: pass
+        except Exception as e: print(f"Purchase Error: {e}")
 
-    def do_item_check(self):
+    def perform_item_check(self):
         p5 = self.point_coords.get(5)
         if not p5: return
         try:
+            time.sleep(0.5)
             keyboard.press_and_release('3')
-            time.sleep(0.3)
+            time.sleep(0.5)
             self.click(p5)
             time.sleep(0.5)
             keyboard.press_and_release('backspace')
-            time.sleep(0.3)
+            time.sleep(0.5)
             keyboard.press_and_release('2')
             time.sleep(0.5)
         except: pass
@@ -329,7 +331,7 @@ class KarooFarm:
         if self.camera is None: self.camera = dxcam.create(output_color="BGR")
         self.camera.start(target_fps=60, video_mode=True)
         try:
-            if self.auto_purchase_var.get(): self.do_purchase()
+            if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
             self.click(self.point_coords[4])
             self.cast()
             
@@ -337,11 +339,10 @@ class KarooFarm:
             detecting = False
             
             while self.main_loop_active:
-                # Get overlay geometry
                 ox, oy = self.overlay_area['x'], self.overlay_area['y']
                 ow, oh = self.overlay_area['width'], self.overlay_area['height']
                 
-                # CRITICAL: Offset capture area to ignore the overlay borders
+                # IGNORE THICK BORDERS
                 scan_x = ox + self.border_size
                 scan_y = oy + self.title_size
                 scan_w = ow - (self.border_size * 2)
@@ -353,10 +354,8 @@ class KarooFarm:
                 img = self.camera.get_latest_frame()
                 if img is None: time.sleep(0.01); continue
                 
-                # Crop
                 img = img[scan_y:scan_y+scan_h, scan_x:scan_x+scan_w]
                 
-                # Vision Logic (Blue->Dark->White->Gap)
                 target = (0x55, 0xaa, 0xff)
                 
                 # Find Blue
@@ -370,23 +369,35 @@ class KarooFarm:
                 
                 if not found:
                     if detecting:
+                        # FISH LOST or CAUGHT
                         time.sleep(self.wait_after_loss)
                         detecting = False
+                        
+                        # LOGIC: Check Purchase -> Check Items -> Cast
+                        
+                        # 1. Purchase Check
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
-                                self.do_purchase(); self.purchase_counter = 0
-                        if self.item_check_var.get(): self.do_item_check()
+                                self.perform_auto_purchase_sequence()
+                                self.purchase_counter = 0
+                        
+                        # 2. Item Check (Only runs here, between casts)
+                        if self.item_check_var.get(): 
+                            self.perform_item_check()
+                            
+                        # 3. Cast
                         self.cast(); last_det = time.time()
+                    
                     elif time.time() - last_det > self.timeout_var.get():
-                        if self.item_check_var.get(): self.do_item_check()
+                        # TIMEOUT
+                        if self.item_check_var.get(): self.perform_item_check()
                         self.cast(); last_det = time.time()
                     time.sleep(0.05); continue
                 
-                # Found Blue -> Detecting State
                 detecting = True; last_det = time.time()
                 
-                # Find Width
+                # Track Bar
                 p2x = None
                 for c in range(scan_w-1, -1, -1):
                     b,g,r_ = img[p1y, c]
@@ -394,11 +405,9 @@ class KarooFarm:
                         p2x = c; break
                 if not p2x: continue
                 
-                # Crop to Bar Width
                 bar = img[:, p1x:p2x+1]
                 bh, bw = bar.shape[0], bar.shape[1]
                 
-                # Find Vertical Bounds (Dark)
                 dark = (0x19, 0x19, 0x19)
                 ty, by = None, None
                 for r in range(bh):
@@ -413,11 +422,9 @@ class KarooFarm:
                     if by: break
                 if not ty or not by: continue
                 
-                # Crop to Bar Height
                 real = bar[ty:by+1, :]
                 rh = real.shape[0]
                 
-                # Find White
                 white = (0xff, 0xff, 0xff)
                 wy = None
                 for r in range(rh):
@@ -426,7 +433,6 @@ class KarooFarm:
                         if r_==white[0] and g==white[1] and b==white[2]: wy=r; break
                     if wy: break
                 
-                # Find Gaps
                 gaps = []
                 st, gc = None, 0
                 for r in range(rh):
@@ -446,7 +452,6 @@ class KarooFarm:
                 if st: gaps.append((st, rh-1))
                 
                 if gaps and wy is not None:
-                    # PD Control
                     best = max(gaps, key=lambda x: x[1]-x[0])
                     mid = (best[0] + best[1]) // 2
                     
@@ -494,49 +499,38 @@ class KarooFarm:
         self.overlay_window = tk.Toplevel(self.root)
         self.overlay_window.overrideredirect(True)
         self.overlay_window.attributes('-topmost', True)
-        self.overlay_window.attributes('-alpha', 0.8) # Slight see through
-        self.overlay_window.wm_attributes("-transparentcolor", "magenta") # Magic color
+        self.overlay_window.attributes('-alpha', 0.8)
+        self.overlay_window.wm_attributes("-transparentcolor", "magenta")
         
         self.overlay_window.geometry(f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}")
-        
-        # Main container with Magenta background (Transparent)
-        # We draw frames AROUND the center to create the "Hollow" look
         
         bg = tk.Frame(self.overlay_window, bg="magenta")
         bg.pack(fill="both", expand=True)
         
-        # Title Bar (Top)
+        # 1. Title (Drag) - REMOVED TEXT LABEL
         bar = tk.Frame(bg, bg=THEME_ACCENT, height=self.title_size, cursor="fleur")
         bar.pack(side="top", fill="x")
-        tk.Label(bar, text="DRAG HERE", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 9, "bold")).pack(expand=True)
         
-        # Bottom Border
+        # 2. Borders (Resize)
         bot = tk.Frame(bg, bg=THEME_ACCENT, height=self.border_size, cursor="sb_v_double_arrow")
         bot.pack(side="bottom", fill="x")
         
-        # Left Border
         left = tk.Frame(bg, bg=THEME_ACCENT, width=self.border_size, cursor="sb_h_double_arrow")
         left.pack(side="left", fill="y")
         
-        # Right Border
         right = tk.Frame(bg, bg=THEME_ACCENT, width=self.border_size, cursor="sb_h_double_arrow")
         right.pack(side="right", fill="y")
 
         # Bindings
         self.drag_data = {"x": 0, "y": 0}
         
-        # Move
         bar.bind("<ButtonPress-1>", self.start_move)
         bar.bind("<B1-Motion>", self.do_move)
         
-        # Resize
         right.bind("<ButtonPress-1>", self.start_resize)
         right.bind("<B1-Motion>", lambda e: self.do_resize(e, "x"))
         bot.bind("<ButtonPress-1>", self.start_resize)
         bot.bind("<B1-Motion>", lambda e: self.do_resize(e, "y"))
-        
-        # Corners (using the intersection of frames via careful binding or visual corners)
-        # Simplified: Right border handles Width, Bottom handles Height.
         
         self.overlay_window.bind("<Configure>", self.save_geo)
 
