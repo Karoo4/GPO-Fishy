@@ -16,6 +16,7 @@ import time
 import json
 import os
 from datetime import datetime
+import numpy as np # Ensure numpy is available for the black screen check
 
 # --- 1. FORCE ADMIN ---
 def is_admin():
@@ -94,7 +95,14 @@ class KarooFish:
         }
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
-        self.camera = None
+        
+        # Initialize Camera ONCE here to prevent DXGI duplication errors/Black screens
+        try:
+            self.camera = dxcam.create(output_color="BGR")
+        except Exception as e:
+            print(f"Camera Init Error: {e}")
+            self.camera = None
+
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         self.point_labels = {} 
 
@@ -355,7 +363,7 @@ class KarooFish:
         info_frame = tk.Frame(header, bg=THEME_CARD)
         info_frame.pack(side="left", fill="y", pady=20)
         tk.Label(info_frame, text="Fisher", font=("Segoe UI", 24, "bold"), bg=THEME_CARD, fg="white").pack(anchor="w")
-        tk.Label(info_frame, text="The Karoo Legend", font=("Segoe UI", 10, "italic"), bg=THEME_CARD, fg=THEME_ACCENT).pack(anchor="w")
+        tk.Label(info_frame, text="The One And Only Karoo", font=("Segoe UI", 10, "italic"), bg=THEME_CARD, fg=THEME_ACCENT).pack(anchor="w")
 
         stats_frame = tk.Frame(self.page_profile, bg=THEME_BG)
         stats_frame.pack(fill="x", padx=20, pady=10)
@@ -484,7 +492,7 @@ class KarooFish:
         self.fishing_active = not self.fishing_active
         if self.fishing_active:
             req = []
-            if self.auto_purchase_var.get(): req.extend([1,2,4])
+            if self.auto_purchase_var.get(): req.extend([1,2,3,4]) # Added 3 as required for auto buy
             if self.item_check_var.get(): req.extend([5,7])
             if self.auto_bait_var.get(): req.append(6)
             
@@ -574,6 +582,8 @@ class KarooFish:
         try:
             self.is_performing_action = True 
             if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]): return
+            
+            # 1. Standard Buy Sequence
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
             self.click(self.point_coords[1], "Pt 1 (Yes)")
@@ -588,8 +598,40 @@ class KarooFish:
             time.sleep(self.purchase_click_delay)
             self.move_to(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
-        except Exception: pass
-        finally: self.is_performing_action = False
+
+            # 2. Check Pt 3 for "No" (Red)
+            if self.point_coords[3]:
+                # We need a frame. The camera is running in the main loop, so we grab latest.
+                # If this function is called alone, we might need a one-off capture.
+                
+                # Check for Red at Pt 3 (Menu stuck open)
+                frame = None
+                if self.camera and self.camera.is_capturing:
+                     frame = self.camera.get_latest_frame()
+                else:
+                    # One-off grab if camera isn't streaming
+                    if not self.camera: self.camera = dxcam.create(output_color="BGR")
+                    frame = self.camera.grab()
+
+                if frame is not None:
+                    p3 = self.point_coords[3]
+                    cx, cy = int(p3[0]), int(p3[1])
+                    if cy < frame.shape[0] and cx < frame.shape[1]:
+                        # BGR format
+                        b, g, r = frame[cy, cx]
+                        # Red is (0, 0, 255). Allow tolerance.
+                        if r > 200 and g < 50 and b < 50:
+                            print("Red detected at Pt 3 (Menu stuck). Forcing close.")
+                            self.click(p3, "Pt 3 (Force Close)")
+                            time.sleep(0.5)
+                            self.click(self.point_coords[2], "Pt 2 (Post-Close Safety)")
+                            time.sleep(0.5)
+                            self.move_to(self.point_coords[4])
+
+        except Exception as e:
+            print(f"Auto Purchase Error: {e}")
+        finally: 
+            self.is_performing_action = False
 
     def perform_store_fruit(self):
         p5, p7 = self.point_coords.get(5), self.point_coords.get(7)
@@ -659,8 +701,13 @@ class KarooFish:
         dark_color = (0x19, 0x19, 0x19)
         white_color = (0xff, 0xff, 0xff)
 
-        if self.camera is None: self.camera = dxcam.create(output_color="BGR")
-        self.camera.start(target_fps=60, video_mode=True)
+        # START CAMERA (Only if not already running)
+        if self.camera is None: 
+            try: self.camera = dxcam.create(output_color="BGR")
+            except: pass
+
+        if self.camera and not self.camera.is_capturing:
+            self.camera.start(target_fps=60, video_mode=True)
 
         try:
             if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
@@ -673,14 +720,33 @@ class KarooFish:
                     time.sleep(0.1)
                     continue
 
-                x, y = self.overlay_area['x'], self.overlay_area['y']
-                width, height = self.overlay_area['width'], self.overlay_area['height']
                 img_full = self.camera.get_latest_frame()
+                
+                # --- BLACK SCREEN FIX ---
+                # Sometimes DXCam buffers zeros or disconnects. 
+                # If frame is None or all zeros, restart logic.
                 if img_full is None:
                     time.sleep(0.01)
                     continue
                 
-                img = img_full[y:y+height, x:x+width]
+                # Quick check if image is pitch black (common bug)
+                if np.sum(img_full) == 0:
+                    print("Black screen detected! Restarting camera...")
+                    self.camera.stop()
+                    time.sleep(0.5)
+                    self.camera.start(target_fps=60, video_mode=True)
+                    time.sleep(0.5)
+                    continue
+                # ------------------------
+
+                x, y = self.overlay_area['x'], self.overlay_area['y']
+                width, height = self.overlay_area['width'], self.overlay_area['height']
+                
+                # Bounds check before slicing
+                if y + height > img_full.shape[0] or x + width > img_full.shape[1]:
+                    img = img_full # Fallback if overlay is out of bounds
+                else:
+                    img = img_full[y:y+height, x:x+width]
 
                 point1_x = None
                 point1_y = None
@@ -849,8 +915,13 @@ class KarooFish:
 
     def run_reroll_loop(self):
         print("Reroll Loop Started")
-        if self.camera is None: self.camera = dxcam.create(output_color="BGR")
-        if not self.camera.is_capturing: self.camera.start(target_fps=30, video_mode=True)
+        
+        # Safe Camera Start
+        if self.camera is None: 
+            try: self.camera = dxcam.create(output_color="BGR")
+            except: pass
+        if self.camera and not self.camera.is_capturing: 
+            self.camera.start(target_fps=30, video_mode=True)
         
         try:
             p8 = self.point_coords.get(8)
@@ -860,6 +931,13 @@ class KarooFish:
                 img = self.camera.get_latest_frame()
                 if img is None: 
                     time.sleep(0.01)
+                    continue
+                
+                # Black Screen check
+                if np.sum(img) == 0:
+                    self.camera.stop()
+                    time.sleep(0.5)
+                    self.camera.start(target_fps=30, video_mode=True)
                     continue
                 
                 if cy < img.shape[0] and cx < img.shape[1]:
@@ -961,6 +1039,9 @@ class KarooFish:
         self.destroy_overlay()
         try: keyboard.unhook_all()
         except: pass
+        if self.camera: 
+            try: self.camera.stop()
+            except: pass
         self.root.destroy()
         sys.exit()
 
