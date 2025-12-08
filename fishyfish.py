@@ -115,11 +115,13 @@ class KarooFish:
         self.img_profile = self.load_circular_icon(PROFILE_ICON_URL)
 
         self.setup_ui()
-        self.register_hotkeys()
         
-        # LOAD CONFIG (Points & Settings)
+        # Load Config first
         self.load_config()
 
+        # Register hotkeys with a slight delay to ensure UI is ready
+        self.root.after(500, self.register_hotkeys)
+        
         # Auto AFK Monitor
         self.root.bind_all("<Any-KeyPress>", self.reset_afk_timer)
         self.root.bind_all("<Any-ButtonPress>", self.reset_afk_timer)
@@ -138,7 +140,6 @@ class KarooFish:
             for k, v in saved_points.items():
                 idx = int(k)
                 self.point_coords[idx] = tuple(v)
-                # Update Labels if they exist
                 if idx in self.point_labels:
                     self.point_labels[idx].config(text=f"{v[0]},{v[1]}", fg="#00ff00")
 
@@ -153,6 +154,14 @@ class KarooFish:
             if "kp" in data: self.kp_var.set(data["kp"])
             if "kd" in data: self.kd_var.set(data["kd"])
             if "timeout" in data: self.timeout_var.set(data["timeout"])
+            
+            # Load Hotkeys
+            if "hotkeys" in data:
+                self.hotkeys.update(data["hotkeys"])
+                # Update labels
+                for k, v in self.hotkeys.items():
+                    if hasattr(self, f"lbl_{k}"):
+                        getattr(self, f"lbl_{k}").config(text=v.upper())
 
             print("Configuration Loaded.")
         except Exception as e:
@@ -162,6 +171,7 @@ class KarooFish:
         try:
             data = {
                 "points": self.point_coords,
+                "hotkeys": self.hotkeys,
                 "auto_purchase": self.auto_purchase_var.get(),
                 "amount": self.amount_var.get(),
                 "loops": self.loops_var.get(),
@@ -181,12 +191,10 @@ class KarooFish:
             print(f"Save error: {e}")
 
     def reset_defaults(self):
-        # Clear Points
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         for idx, lbl in self.point_labels.items():
             lbl.config(text="Not Set", fg="red")
         
-        # Reset Vars
         self.auto_purchase_var.set(False)
         self.amount_var.set(10)
         self.loops_var.set(10)
@@ -197,6 +205,13 @@ class KarooFish:
         self.kp_var.set(0.1)
         self.kd_var.set(0.5)
         self.timeout_var.set(15.0)
+        
+        # Reset hotkeys
+        self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
+        for k, v in self.hotkeys.items():
+            if hasattr(self, f"lbl_{k}"):
+                getattr(self, f"lbl_{k}").config(text=v.upper())
+        self.register_hotkeys()
         
         self.status_msg.config(text="Restored Defaults", fg=THEME_ACCENT)
         self.save_config()
