@@ -382,7 +382,7 @@ class KarooFish:
         info_frame = tk.Frame(header, bg=THEME_CARD)
         info_frame.pack(side="left", fill="y", pady=20)
         tk.Label(info_frame, text="Fisher", font=("Segoe UI", 24, "bold"), bg=THEME_CARD, fg="white").pack(anchor="w")
-        tk.Label(info_frame, text="The Karoo Legend", font=("Segoe UI", 10, "italic"), bg=THEME_CARD, fg=THEME_ACCENT).pack(anchor="w")
+        tk.Label(info_frame, text="The One And Only Karoo", font=("Segoe UI", 10, "italic"), bg=THEME_CARD, fg=THEME_ACCENT).pack(anchor="w")
 
         # --- STATS CARD ---
         stats_frame = tk.Frame(self.page_profile, bg=THEME_BG)
