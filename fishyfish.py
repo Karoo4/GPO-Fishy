@@ -97,7 +97,8 @@ class KarooFish:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         
-        # Camera is now Lazy-Loaded (Created only when loop starts)
+        # --- FIX: STRICT LAZY LOADING ---
+        # Do NOT initialize dxcam here. It breaks keybinds.
         self.camera = None
 
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
@@ -115,8 +116,8 @@ class KarooFish:
         # Load Config first
         self.load_config()
 
-        # Register hotkeys
-        self.root.after(100, self.register_hotkeys)
+        # Register hotkeys 
+        self.register_hotkeys()
         
         # Auto AFK Monitor
         self.root.bind_all("<Any-KeyPress>", self.reset_afk_timer)
@@ -553,15 +554,15 @@ class KarooFish:
         self.root.after(1000, self.check_auto_afk)
 
     def register_hotkeys(self):
-        keyboard.unhook_all()
-        for k, f in [('toggle_loop', self.toggle_loop), ('toggle_overlay', self.toggle_overlay), ('toggle_afk', self.toggle_afk), ('exit', self.exit_app)]:
-            try:
+        try:
+            keyboard.unhook_all()
+            for k, f in [('toggle_loop', self.toggle_loop), ('toggle_overlay', self.toggle_overlay), ('toggle_afk', self.toggle_afk), ('exit', self.exit_app)]:
                 # Use current hotkey config
                 key_name = self.hotkeys.get(k, '')
                 if key_name:
                     keyboard.add_hotkey(key_name, lambda f=f: self.root.after(0, f))
-            except Exception as e:
-                print(f"Failed to register hotkey {k}: {e}")
+        except Exception as e:
+            print(f"Failed to register hotkeys: {e}")
 
     def toggle_afk(self):
         self.afk_mode_active = not self.afk_mode_active
