@@ -47,7 +47,7 @@ class KarooFish:
     def __init__(self, root):
         self.root = root
         self.root.title("Karoo Fish")
-        self.root.geometry("450x900")
+        self.root.geometry("450x950") # Slightly taller for new point
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
 
@@ -91,7 +91,7 @@ class KarooFish:
         self.purchase_delay_after_key = 2.0   
         self.purchase_click_delay = 0.8       
         self.purchase_after_type_delay = 0.8
-        self.clean_step_delay = 1.5           
+        self.clean_step_delay = 1.0           
         
         # Items
         self.check_items = True
@@ -108,8 +108,8 @@ class KarooFish:
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         self.camera = None
         
-        # Points
-        self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None}
+        # Points (Added Pt 7 for Slot 3 Check)
+        self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None}
         self.point_labels = {} 
 
         # --- DATA MANAGEMENT ---
@@ -135,16 +135,10 @@ class KarooFish:
         self.last_user_activity = time.time()
 
     def check_auto_afk(self):
-        # Only switch to AFK if:
-        # 1. Auto AFK is enabled
-        # 2. Main Loop is ON (Bot is running)
-        # 3. We are not already in AFK mode
         if self.auto_afk_var.get() and self.main_loop_active and not self.afk_mode_active:
             idle_time = time.time() - self.last_user_activity
             if idle_time > self.auto_afk_seconds_var.get():
                 self.toggle_afk()
-        
-        # Check every 1 second
         self.root.after(1000, self.check_auto_afk)
 
     # --- DATA & JSON ---
@@ -167,11 +161,9 @@ class KarooFish:
                 "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
                 "count": self.session_loops
             }
-            # Add to history (keep last 50)
             self.stats["history"].insert(0, entry)
             self.stats["history"] = self.stats["history"][:50]
             self.save_stats()
-            # Reset session
             self.session_loops = 0
             self.refresh_profile_ui()
 
@@ -229,18 +221,15 @@ class KarooFish:
         self.container = tk.Frame(self.root, bg=THEME_BG)
         self.container.pack(fill="both", expand=True)
 
-        # 1. Main Page
         self.page_main = tk.Frame(self.container, bg=THEME_BG)
         self.page_main.place(relwidth=1, relheight=1)
         if self.bg_main: tk.Label(self.page_main, image=self.bg_main, bg=THEME_BG).place(x=0, y=0, relwidth=1, relheight=1)
         self.create_main_widgets()
 
-        # 2. AFK Page
         self.page_afk = tk.Frame(self.container, bg=THEME_BG)
         if self.bg_afk: tk.Label(self.page_afk, image=self.bg_afk, bg=THEME_BG).place(x=0, y=0, relwidth=1, relheight=1)
         self.create_afk_widgets()
 
-        # 3. Profile Page
         self.page_profile = tk.Frame(self.container, bg=THEME_BG)
         self.create_profile_widgets()
 
@@ -287,6 +276,7 @@ class KarooFish:
         self.item_check_var = tk.BooleanVar(value=True)
         self.create_toggle(frame, "Enable Auto Store", self.item_check_var)
         self.create_point_row(frame, 5, "Pt 5 (Store Button)")
+        self.create_point_row(frame, 7, "Pt 7 (Slot 3 Check)") # NEW POINT
 
         self.create_section(frame, "Auto Bait")
         self.auto_bait_var = tk.BooleanVar(value=False)
@@ -458,7 +448,7 @@ class KarooFish:
         if self.main_loop_active:
             req = []
             if self.auto_purchase_var.get(): req.extend([1,2,4])
-            if self.item_check_var.get(): req.append(5)
+            if self.item_check_var.get(): req.extend([5,7]) # REQUIRE Pt 5 AND Pt 7
             if self.auto_bait_var.get(): req.append(6)
             
             if any(not self.point_coords.get(p) for p in req):
@@ -569,32 +559,54 @@ class KarooFish:
 
     def perform_store_fruit(self):
         p5 = self.point_coords.get(5)
-        if not p5: return
-        
-        chk_x, chk_y = 1262, 156
-        def check_red_pixel():
+        p7 = self.point_coords.get(7)
+        if not p5 or not p7: 
+            print("Missing Pt 5 or Pt 7")
+            return
+
+        def is_white_icon_visible():
+            # Checks Pt 7 (the white question mark)
             img = self.camera.get_latest_frame()
             if img is None: return False
-            if chk_y >= img.shape[0] or chk_x >= img.shape[1]: return False
-            b, g, r = img[chk_y, chk_x] 
-            return (r > 230) and (70 < g < 130) and (70 < b < 130)
+            cx, cy = int(p7[0]), int(p7[1])
+            if cy >= img.shape[0] or cx >= img.shape[1]: return False
+            b, g, r = img[cy, cx]
+            # White-ish detection
+            return (r > 200 and g > 200 and b > 200)
 
         try:
-            print("--- AUTO STORE SEQUENCE ---")
+            print("--- AUTO STORE SEQUENCE (UPDATED) ---")
             self.is_performing_action = True 
 
+            # 1. Reset/Prepare (Press 2)
             keyboard.press_and_release('2')
             time.sleep(0.5)
+
+            # 2. Equip Slot 3
             keyboard.press_and_release('3')
             time.sleep(self.clean_step_delay)
-            self.click(p5, "Pt 5 (Store Fruit)")
-            time.sleep(self.clean_step_delay)
 
-            if check_red_pixel():
-                print("Pixel is RED.")
+            # 3. Check for fruit (White pixel at Pt 7)
+            if is_white_icon_visible():
+                print("Fruit Detected! Attempting to store...")
+                
+                # Attempt to store (Try 3 times as requested)
+                for i in range(3):
+                    self.click(p5, f"Store Click {i+1}")
+                    time.sleep(0.8)
+                    if not is_white_icon_visible():
+                        print("Fruit stored successfully (icon gone).")
+                        break
+                
+                # If still visible after 3 tries, it's a duplicate
+                if is_white_icon_visible():
+                    print("Duplicate Fruit detected (Icon still there). Dropping...")
+                    keyboard.press_and_release('backspace')
+                    time.sleep(1.0)
             else:
-                print("Pixel NOT Red.")
+                print("No fruit icon detected at Pt 7.")
 
+            # 4. Reset to Rod
             keyboard.press_and_release('2')
             time.sleep(0.5)
             self.move_to(self.point_coords[4])
