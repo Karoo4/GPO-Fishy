@@ -17,7 +17,7 @@ import json
 import os
 from datetime import datetime
 
-# --- 1. FORCE ADMIN (Required for Clicking) ---
+# --- 1. FORCE ADMIN ---
 def is_admin():
     try: return ctypes.windll.shell32.IsUserAnAdmin()
     except: return False
@@ -29,7 +29,7 @@ if not is_admin():
 # --- CONFIGURATION ---
 THEME_BG = "#0b0b0b"
 THEME_ACCENT = "#ff8d00" # Orange
-THEME_CARD = "#1a1a1a"   # Dark Grey for Profile Cards
+THEME_CARD = "#1a1a1a"   # Dark Grey
 FONT_MAIN = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 11, "bold")
 FONT_TITLE = ("Segoe UI", 20, "bold")
@@ -47,58 +47,46 @@ class KarooFish:
     def __init__(self, root):
         self.root = root
         self.root.title("Karoo Fish")
-        self.root.geometry("450x950") # Slightly taller for new point
+        self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
 
         try: ctypes.windll.shcore.SetProcessDpiAwareness(1)
         except: pass
 
-        # State
-        self.main_loop_active = False
+        # --- STATE ---
+        self.fishing_active = False
+        self.reroll_active = False
         self.overlay_active = False
         self.afk_mode_active = False
+        
         self.overlay_window = None
         self.is_clicking = False
-        self.recording_hotkey = None
-        
-        # --- FLAGS ---
         self.is_performing_action = False 
         self.last_cast_time = 0.0
-        
-        # --- AUTO AFK STATE ---
         self.last_user_activity = time.time()
         
-        # Overlay Logic State
+        # --- CONFIG VARS ---
         self.resize_threshold = 10
         self.dragging = False
         self.resizing = False
         self.resize_edge = None
-        
-        # Overlay Config
         self.border_size = 5      
         
-        # Logic Config
         self.purchase_counter = 0     
-        self.session_loops = 0        # Current Session Count
+        self.session_loops = 0        
         self.kp = 0.1
         self.kd = 0.5
         self.previous_error = 0
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        # --- DELAYS ---
         self.purchase_delay_after_key = 2.0   
         self.purchase_click_delay = 0.8       
         self.purchase_after_type_delay = 0.8
         self.clean_step_delay = 1.0           
         
-        # Items
-        self.check_items = True
-
         self.dpi_scale = self.get_dpi_scale()
-        
-        # Initial Overlay Size
         self.overlay_area = {
             'x': 100, 'y': 100, 
             'width': int(180 * self.dpi_scale), 
@@ -107,15 +95,11 @@ class KarooFish:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         self.camera = None
-        
-        # Points (Added Pt 7 for Slot 3 Check)
-        self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None}
+        self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         self.point_labels = {} 
 
-        # --- DATA MANAGEMENT ---
         self.stats = self.load_stats()
 
-        # Images
         self.bg_main = self.load_processed_image(VIVI_URL, 0.3)
         self.bg_afk = self.load_processed_image(DUCK_URL, 0.4)
         self.img_title = self.load_title_image(TITLE_LOGO_URL)
@@ -124,59 +108,13 @@ class KarooFish:
         self.setup_ui()
         self.register_hotkeys()
         
-        # --- BIND ACTIVITY & START CHECKER ---
+        # Auto AFK Monitor
         self.root.bind_all("<Any-KeyPress>", self.reset_afk_timer)
         self.root.bind_all("<Any-ButtonPress>", self.reset_afk_timer)
         self.root.bind_all("<Motion>", self.reset_afk_timer)
         self.check_auto_afk()
 
-    # --- AUTO AFK LOGIC ---
-    def reset_afk_timer(self, event=None):
-        self.last_user_activity = time.time()
-
-    def check_auto_afk(self):
-        if self.auto_afk_var.get() and self.main_loop_active and not self.afk_mode_active:
-            idle_time = time.time() - self.last_user_activity
-            if idle_time > self.auto_afk_seconds_var.get():
-                self.toggle_afk()
-        self.root.after(1000, self.check_auto_afk)
-
-    # --- DATA & JSON ---
-    def load_stats(self):
-        if os.path.exists(STATS_FILE):
-            try:
-                with open(STATS_FILE, 'r') as f:
-                    return json.load(f)
-            except: pass
-        return {"total_caught": 0, "history": []}
-
-    def save_stats(self):
-        with open(STATS_FILE, 'w') as f:
-            json.dump(self.stats, f, indent=4)
-
-    def record_session(self):
-        if self.session_loops > 0:
-            self.stats["total_caught"] += self.session_loops
-            entry = {
-                "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "count": self.session_loops
-            }
-            self.stats["history"].insert(0, entry)
-            self.stats["history"] = self.stats["history"][:50]
-            self.save_stats()
-            self.session_loops = 0
-            self.refresh_profile_ui()
-
-    def delete_selected_session(self):
-        selection = self.hist_list.curselection()
-        if not selection: return
-        index = selection[0]
-        if 0 <= index < len(self.stats['history']):
-            del self.stats['history'][index]
-            self.save_stats()
-            self.refresh_profile_ui()
-
-    # --- IMAGE HELPERS ---
+    # --- HELPERS ---
     def get_dpi_scale(self):
         try: return self.root.winfo_fpixels('1i') / 96.0
         except: return 1.0
@@ -216,14 +154,44 @@ class KarooFish:
             return ImageTk.PhotoImage(img)
         except: return None
 
-    # --- UI ---
+    def load_stats(self):
+        if os.path.exists(STATS_FILE):
+            try:
+                with open(STATS_FILE, 'r') as f:
+                    return json.load(f)
+            except: pass
+        return {"total_caught": 0, "history": []}
+
+    def save_stats(self):
+        with open(STATS_FILE, 'w') as f:
+            json.dump(self.stats, f, indent=4)
+
+    def record_session(self):
+        if self.session_loops > 0:
+            self.stats["total_caught"] += self.session_loops
+            entry = {"date": datetime.now().strftime("%Y-%m-%d %H:%M"), "count": self.session_loops}
+            self.stats["history"].insert(0, entry)
+            self.stats["history"] = self.stats["history"][:50]
+            self.save_stats()
+            self.session_loops = 0
+            self.refresh_profile_ui()
+
+    # --- UI SETUP ---
     def setup_ui(self):
+        # Configure Notebook Style
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure("TNotebook", background=THEME_BG, borderwidth=0)
+        style.configure("TNotebook.Tab", background="#202020", foreground="white", padding=[10, 5], font=FONT_BOLD, borderwidth=0)
+        style.map("TNotebook.Tab", background=[("selected", THEME_ACCENT)], foreground=[("selected", "black")])
+
         self.container = tk.Frame(self.root, bg=THEME_BG)
         self.container.pack(fill="both", expand=True)
 
         self.page_main = tk.Frame(self.container, bg=THEME_BG)
         self.page_main.place(relwidth=1, relheight=1)
         if self.bg_main: tk.Label(self.page_main, image=self.bg_main, bg=THEME_BG).place(x=0, y=0, relwidth=1, relheight=1)
+        
         self.create_main_widgets()
 
         self.page_afk = tk.Frame(self.container, bg=THEME_BG)
@@ -234,32 +202,53 @@ class KarooFish:
         self.create_profile_widgets()
 
     def create_main_widgets(self):
-        canvas = tk.Canvas(self.page_main, bg=THEME_BG, highlightthickness=0)
-        sb = ttk.Scrollbar(self.page_main, orient="vertical", command=canvas.yview)
+        # --- HEADER (Logo & Profile) ---
+        header_frame = tk.Frame(self.page_main, bg=THEME_BG)
+        header_frame.pack(fill="x", pady=(10, 0))
+        
+        if self.img_title:
+            tk.Label(header_frame, image=self.img_title, bg=THEME_BG).pack(pady=5)
+        else:
+            tk.Label(header_frame, text="Karoo Fish", font=FONT_TITLE, bg=THEME_BG, fg=THEME_ACCENT).pack(pady=5)
+
+        tk.Button(header_frame, text="View Profile & Stats", bg=THEME_CARD, fg="white", font=FONT_BOLD, relief="flat", 
+                  command=self.show_profile).pack(pady=5)
+
+        # --- TABS ---
+        self.notebook = ttk.Notebook(self.page_main)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Tab 1: Fishing
+        self.tab_fishing = tk.Frame(self.notebook, bg=THEME_BG)
+        self.notebook.add(self.tab_fishing, text="Fishing Bot")
+        self.create_fishing_tab(self.tab_fishing)
+
+        # Tab 2: Race Reroll
+        self.tab_reroll = tk.Frame(self.notebook, bg=THEME_BG)
+        self.notebook.add(self.tab_reroll, text="Race Reroll")
+        self.create_reroll_tab(self.tab_reroll)
+
+    def create_fishing_tab(self, parent):
+        canvas = tk.Canvas(parent, bg=THEME_BG, highlightthickness=0)
+        sb = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview)
         sb.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
         canvas.configure(yscrollcommand=sb.set)
         
         frame = tk.Frame(canvas, bg=THEME_BG)
-        canvas.create_window((0, 0), window=frame, anchor="nw", width=430)
+        canvas.create_window((0, 0), window=frame, anchor="nw", width=420)
         frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
-        if self.img_title:
-            tk.Label(frame, image=self.img_title, bg=THEME_BG).pack(pady=(20, 10))
-        else:
-            tk.Label(frame, text="Karoo Fish", font=FONT_TITLE, bg=THEME_BG, fg=THEME_ACCENT).pack(pady=(20, 10))
-
+        # Status
         st = tk.Frame(frame, bg=THEME_BG, highlightbackground=THEME_ACCENT, highlightthickness=1)
-        st.pack(fill="x", padx=20, pady=10)
-        self.loop_status = tk.Label(st, text="Main Loop: OFF", font=FONT_BOLD, bg=THEME_BG, fg="red")
-        self.loop_status.pack(pady=5)
+        st.pack(fill="x", padx=10, pady=10)
+        self.fishing_status_lbl = tk.Label(st, text="Fishing: OFF", font=FONT_BOLD, bg=THEME_BG, fg="red")
+        self.fishing_status_lbl.pack(pady=5)
         self.overlay_status = tk.Label(st, text="Overlay: OFF", font=FONT_MAIN, bg=THEME_BG, fg="gray")
         self.overlay_status.pack(pady=5)
 
-        tk.Button(frame, text="View Profile & Stats", bg=THEME_CARD, fg="white", font=FONT_BOLD, relief="flat", 
-                  command=self.show_profile).pack(fill="x", padx=20, pady=(0, 10))
-
+        # Controls
         self.create_section(frame, "Auto Purchase")
         self.auto_purchase_var = tk.BooleanVar(value=False)
         self.create_toggle(frame, "Active", self.auto_purchase_var)
@@ -276,7 +265,7 @@ class KarooFish:
         self.item_check_var = tk.BooleanVar(value=True)
         self.create_toggle(frame, "Enable Auto Store", self.item_check_var)
         self.create_point_row(frame, 5, "Pt 5 (Store Button)")
-        self.create_point_row(frame, 7, "Pt 7 (Slot 3 Check)") # NEW POINT
+        self.create_point_row(frame, 7, "Pt 7 (Slot 3 Check)")
 
         self.create_section(frame, "Auto Bait")
         self.auto_bait_var = tk.BooleanVar(value=False)
@@ -306,6 +295,29 @@ class KarooFish:
         self.status_msg = tk.Label(frame, text="", bg=THEME_BG, fg=THEME_ACCENT)
         self.status_msg.pack(pady=20)
 
+    def create_reroll_tab(self, parent):
+        frame = tk.Frame(parent, bg=THEME_BG)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Status
+        st = tk.Frame(frame, bg=THEME_BG, highlightbackground=THEME_ACCENT, highlightthickness=1)
+        st.pack(fill="x", pady=10)
+        self.reroll_status_lbl = tk.Label(st, text="Reroll: OFF", font=FONT_BOLD, bg=THEME_BG, fg="red")
+        self.reroll_status_lbl.pack(pady=10)
+
+        # Info
+        tk.Label(frame, text="Auto Race Reroll", font=FONT_TITLE, bg=THEME_BG, fg=THEME_ACCENT).pack(anchor="w", pady=(10, 5))
+        tk.Label(frame, text="This mode checks for the GOLD button color (#b37a00).\nIt runs independently from fishing.", 
+                 bg=THEME_BG, fg="gray", justify="left").pack(anchor="w", pady=5)
+
+        # Controls
+        self.create_section(frame, "Configuration")
+        self.create_point_row(frame, 8, "Pt 8 (Reroll Button)")
+        
+        tk.Label(frame, text="\nHow to use:", font=FONT_BOLD, bg=THEME_BG, fg="white").pack(anchor="w")
+        tk.Label(frame, text="1. Set Pt 8 on the center of the 'Reroll' button.\n2. Switch to this tab.\n3. Press F1 to Start/Stop.", 
+                 bg=THEME_BG, fg="white", justify="left").pack(anchor="w", pady=5)
+
     def create_afk_widgets(self):
         center_frame = tk.Frame(self.page_afk, bg=THEME_BG) 
         tk.Label(self.page_afk, text="AFK MODE", font=("Segoe UI", 36, "bold"), bg=THEME_BG, fg=THEME_ACCENT).place(relx=0.5, rely=0.15, anchor="center")
@@ -320,8 +332,7 @@ class KarooFish:
 
     def create_profile_widgets(self):
         tk.Label(self.page_profile, bg=THEME_BG).place(x=0, y=0, relwidth=1, relheight=1)
-        tk.Button(self.page_profile, text="← Back", bg=THEME_BG, fg="white", relief="flat", font=FONT_BOLD,
-                  command=self.show_main).pack(anchor="nw", padx=20, pady=20)
+        tk.Button(self.page_profile, text="← Back", bg=THEME_BG, fg="white", relief="flat", font=FONT_BOLD, command=self.show_main).pack(anchor="nw", padx=20, pady=20)
         
         header = tk.Frame(self.page_profile, bg=THEME_CARD, height=150)
         header.pack(fill="x", padx=20, pady=10)
@@ -349,19 +360,15 @@ class KarooFish:
         hist_frame = tk.Frame(self.page_profile, bg=THEME_CARD)
         hist_frame.pack(fill="both", expand=True, padx=20, pady=0)
         
-        self.hist_list = tk.Listbox(hist_frame, bg=THEME_CARD, fg="white", font=("Consolas", 10), 
-                                    borderwidth=0, highlightthickness=0, selectbackground=THEME_ACCENT)
+        self.hist_list = tk.Listbox(hist_frame, bg=THEME_CARD, fg="white", font=("Consolas", 10), borderwidth=0, highlightthickness=0, selectbackground=THEME_ACCENT)
         sb = ttk.Scrollbar(hist_frame, orient="vertical", command=self.hist_list.yview)
-        
         self.hist_list.pack(side="left", fill="both", expand=True, padx=10, pady=10)
         sb.pack(side="right", fill="y")
         self.hist_list.config(yscrollcommand=sb.set)
 
         btn_frame = tk.Frame(self.page_profile, bg=THEME_BG)
         btn_frame.pack(fill="x", padx=20, pady=(5, 20))
-        tk.Button(btn_frame, text="Delete Selected", bg=THEME_CARD, fg="white", font=("Segoe UI", 9), relief="flat",
-                  command=self.delete_selected_session).pack(side="right")
-        
+        tk.Button(btn_frame, text="Delete Selected", bg=THEME_CARD, fg="white", font=("Segoe UI", 9), relief="flat", command=self.delete_selected_session).pack(side="right")
         self.refresh_profile_ui()
 
     def refresh_profile_ui(self):
@@ -422,7 +429,18 @@ class KarooFish:
         l.pack(side="right", padx=10)
         setattr(self, f"lbl_{key}", l); setattr(self, f"btn_{key}", b)
 
-    # --- LOGIC ---
+    # --- INPUT LOGIC ---
+    def reset_afk_timer(self, event=None):
+        self.last_user_activity = time.time()
+
+    def check_auto_afk(self):
+        # Check AFK only if Fishing Bot is active
+        if self.auto_afk_var.get() and self.fishing_active and not self.afk_mode_active:
+            idle_time = time.time() - self.last_user_activity
+            if idle_time > self.auto_afk_seconds_var.get():
+                self.toggle_afk()
+        self.root.after(1000, self.check_auto_afk)
+
     def register_hotkeys(self):
         try:
             keyboard.unhook_all()
@@ -444,39 +462,55 @@ class KarooFish:
             self.last_user_activity = time.time()
 
     def toggle_loop(self):
-        self.main_loop_active = not self.main_loop_active
-        if self.main_loop_active:
+        # Determine current tab
+        current_tab = self.notebook.index(self.notebook.select())
+        
+        if current_tab == 0: # Fishing Tab
+            self.toggle_fishing()
+        elif current_tab == 1: # Reroll Tab
+            self.toggle_reroll()
+
+    def toggle_fishing(self):
+        if self.reroll_active: return # Cannot run both
+        self.fishing_active = not self.fishing_active
+        if self.fishing_active:
             req = []
             if self.auto_purchase_var.get(): req.extend([1,2,4])
-            if self.item_check_var.get(): req.extend([5,7]) # REQUIRE Pt 5 AND Pt 7
+            if self.item_check_var.get(): req.extend([5,7])
             if self.auto_bait_var.get(): req.append(6)
             
             if any(not self.point_coords.get(p) for p in req):
-                self.main_loop_active = False
-                self.status_msg.config(text="Missing Points!", fg="red")
+                self.fishing_active = False
+                self.status_msg.config(text="Missing Fishing Points!", fg="red")
                 return
             
             self.purchase_counter = 0
             self.session_loops = 0 
             self.afk_session_label.config(text="0")
             self.last_user_activity = time.time() 
-            
-            self.loop_status.config(text="Main Loop: ON", fg="#00ff00")
-            
-            if self.overlay_window:
-                self.overlay_window.withdraw()
-                
-            threading.Thread(target=self.run_loop, daemon=True).start()
+            self.fishing_status_lbl.config(text="Fishing: ON", fg="#00ff00")
+            if self.overlay_window: self.overlay_window.withdraw()
+            threading.Thread(target=self.run_fishing_loop, daemon=True).start()
         else:
-            self.loop_status.config(text="Main Loop: OFF", fg="red")
+            self.fishing_status_lbl.config(text="Fishing: OFF", fg="red")
             self.is_clicking = False
             self.is_performing_action = False
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            
             self.record_session()
-            
-            if self.overlay_window:
-                self.overlay_window.deiconify()
+            if self.overlay_window: self.overlay_window.deiconify()
+
+    def toggle_reroll(self):
+        if self.fishing_active: return
+        self.reroll_active = not self.reroll_active
+        if self.reroll_active:
+            if not self.point_coords.get(8):
+                self.reroll_active = False
+                self.status_msg.config(text="Missing Pt 8 for Reroll!", fg="red")
+                return
+            self.reroll_status_lbl.config(text="Reroll: ON", fg="#00ff00")
+            threading.Thread(target=self.run_reroll_loop, daemon=True).start()
+        else:
+            self.reroll_status_lbl.config(text="Reroll: OFF", fg="red")
 
     def capture_pt(self, idx):
         self.status_msg.config(text=f"Click for Pt {idx}...", fg=THEME_ACCENT)
@@ -500,7 +534,7 @@ class KarooFish:
             return False
         pynput_keyboard.Listener(on_press=on_press).start()
 
-    # --- MOUSE HELPERS ---
+    # --- MOUSE ACTIONS ---
     def move_to(self, pt):
         if not pt: return
         try:
@@ -512,9 +546,7 @@ class KarooFish:
         except Exception: pass
 
     def click(self, pt, debug_name="Target", hold_time=0.1):
-        if not pt: 
-            print(f"Skipping {debug_name} - No Coords")
-            return
+        if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
             print(f"Clicking: {debug_name} at {x},{y}")
@@ -528,16 +560,11 @@ class KarooFish:
             time.sleep(0.05)
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
-    # --- ACTIONS ---
-
+    # --- ACTIONS (FISHING) ---
     def perform_auto_purchase_sequence(self):
         try:
-            print("--- START AUTO BUY ---")
             self.is_performing_action = True 
-            
-            if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]):
-                return
-
+            if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]): return
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
             self.click(self.point_coords[1], "Pt 1 (Yes)")
@@ -552,68 +579,40 @@ class KarooFish:
             time.sleep(self.purchase_click_delay)
             self.move_to(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
-            
-            print("--- END AUTO BUY ---")
-        except Exception as e: print(f"Purchase Error: {e}")
+        except Exception: pass
         finally: self.is_performing_action = False
 
     def perform_store_fruit(self):
-        p5 = self.point_coords.get(5)
-        p7 = self.point_coords.get(7)
-        if not p5 or not p7: 
-            print("Missing Pt 5 or Pt 7")
-            return
+        p5, p7 = self.point_coords.get(5), self.point_coords.get(7)
+        if not p5 or not p7: return
 
         def is_white_icon_visible():
-            # Checks Pt 7 (the white question mark)
             img = self.camera.get_latest_frame()
             if img is None: return False
             cx, cy = int(p7[0]), int(p7[1])
             if cy >= img.shape[0] or cx >= img.shape[1]: return False
             b, g, r = img[cy, cx]
-            # White-ish detection
             return (r > 200 and g > 200 and b > 200)
 
         try:
-            print("--- AUTO STORE SEQUENCE (UPDATED) ---")
             self.is_performing_action = True 
-
-            # 1. Reset/Prepare (Press 2)
             keyboard.press_and_release('2')
             time.sleep(0.5)
-
-            # 2. Equip Slot 3
             keyboard.press_and_release('3')
             time.sleep(self.clean_step_delay)
-
-            # 3. Check for fruit (White pixel at Pt 7)
             if is_white_icon_visible():
-                print("Fruit Detected! Attempting to store...")
-                
-                # Attempt to store (Try 3 times as requested)
                 for i in range(3):
                     self.click(p5, f"Store Click {i+1}")
                     time.sleep(0.8)
-                    if not is_white_icon_visible():
-                        print("Fruit stored successfully (icon gone).")
-                        break
-                
-                # If still visible after 3 tries, it's a duplicate
+                    if not is_white_icon_visible(): break
                 if is_white_icon_visible():
-                    print("Duplicate Fruit detected (Icon still there). Dropping...")
                     keyboard.press_and_release('backspace')
                     time.sleep(1.0)
-            else:
-                print("No fruit icon detected at Pt 7.")
-
-            # 4. Reset to Rod
             keyboard.press_and_release('2')
             time.sleep(0.5)
             self.move_to(self.point_coords[4])
             time.sleep(0.2)
-            
-        except Exception as e: 
-            print(f"Store Error: {e}")
+        except Exception: 
             keyboard.press_and_release('2')
         finally:
             self.is_performing_action = False
@@ -622,64 +621,57 @@ class KarooFish:
         if not self.auto_bait_var.get(): return
         p6 = self.point_coords.get(6)
         if not p6: return
-
         try:
-            print("--- AUTO BAIT SELECT ---")
             self.is_performing_action = True 
             self.click(p6, "Pt 6 (Bait Select)")
             time.sleep(0.5) 
             self.move_to(self.point_coords[4])
             time.sleep(0.2)
-        except Exception as e: print(f"Bait Error: {e}")
+        except Exception: pass
         finally: self.is_performing_action = False
 
     def cast(self):
         if self.is_performing_action: return 
-        
         self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
         self.is_clicking = False
         self.session_loops += 1
         self.last_cast_time = time.time()
-        
         if self.afk_mode_active:
              self.root.after(0, lambda: self.afk_session_label.config(text=str(self.session_loops)))
              current_total = self.stats['total_caught'] + self.session_loops
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
-
         self.previous_error = 0
         time.sleep(0.5)
 
-    def run_loop(self):
-        print("Main Loop started")
+    # --- LOOPS ---
+    def run_fishing_loop(self):
+        print("Fishing Loop Started")
         target_color = (0x55, 0xaa, 0xff) 
         dark_color = (0x19, 0x19, 0x19)
         white_color = (0xff, 0xff, 0xff)
 
-        if self.camera is None:
-            self.camera = dxcam.create(output_color="BGR")
+        if self.camera is None: self.camera = dxcam.create(output_color="BGR")
         self.camera.start(target_fps=60, video_mode=True)
 
         try:
             if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
             self.cast()
-            
             last_detection_time = time.time()
             was_detecting = False
 
-            while self.main_loop_active:
+            while self.fishing_active:
                 if self.is_performing_action:
                     time.sleep(0.1)
                     continue
 
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 width, height = self.overlay_area['width'], self.overlay_area['height']
-
-                img = self.camera.get_latest_frame()
-                if img is None:
+                img_full = self.camera.get_latest_frame()
+                if img_full is None:
                     time.sleep(0.01)
                     continue
-
-                img = img[y:y+height, x:x+width]
+                
+                img = img_full[y:y+height, x:x+width]
 
                 point1_x = None
                 point1_y = None
@@ -711,10 +703,8 @@ class KarooFish:
                         
                         if self.item_check_var.get(): self.perform_store_fruit()
                         if self.auto_bait_var.get(): self.perform_bait_select()
-                        
                         self.cast()
                         last_detection_time = time.time()
-                        
                     elif current_time - last_detection_time > self.scan_timeout:
                         print("Timeout. Recasting...")
                         if self.item_check_var.get(): self.perform_store_fruit()
@@ -829,7 +819,6 @@ class KarooFish:
                     pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
                     
                     time_since_cast = time.time() - self.last_cast_time
-                    
                     if pd_output > 0:
                         if time_since_cast > 3.0: 
                             if not self.is_clicking:
@@ -839,17 +828,46 @@ class KarooFish:
                         if self.is_clicking:
                             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                             self.is_clicking = False
-                
                 time.sleep(0.01)
 
         except Exception as e:
-            print(f"Error in run_loop: {e}")
+            print(f"Error in fishing loop: {e}")
         finally:
             self.camera.stop()
             if self.is_clicking:
                 win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                 self.is_clicking = False
 
+    def run_reroll_loop(self):
+        print("Reroll Loop Started")
+        if self.camera is None: self.camera = dxcam.create(output_color="BGR")
+        if not self.camera.is_capturing: self.camera.start(target_fps=30, video_mode=True)
+        
+        try:
+            p8 = self.point_coords.get(8)
+            cx, cy = int(p8[0]), int(p8[1])
+            
+            while self.reroll_active:
+                img = self.camera.get_latest_frame()
+                if img is None: 
+                    time.sleep(0.01)
+                    continue
+                
+                if cy < img.shape[0] and cx < img.shape[1]:
+                    b, g, r = img[cy, cx]
+                    # Check for Gold #b37a00 (R:179, G:122, B:0) +/- 35
+                    if (abs(r - 179) < 35) and (abs(g - 122) < 35) and (abs(b - 0) < 35):
+                        print("Reroll Button Detected. Clicking.")
+                        self.click(p8, "Reroll")
+                        time.sleep(0.2)
+                
+                time.sleep(0.1) # Check 10 times a second
+        except Exception as e:
+            print(f"Error in reroll loop: {e}")
+        finally:
+            self.camera.stop()
+
+    # --- OVERLAY ---
     def toggle_overlay(self):
         self.overlay_active = not self.overlay_active
         if self.overlay_active:
@@ -881,73 +899,42 @@ class KarooFish:
         w = self.overlay_window.winfo_width()
         h = self.overlay_window.winfo_height()
         edge = 15
-        left = x < edge
-        right = x > w - edge
-        top = y < edge
-        bottom = y > h - edge
-        
+        left, right, top, bottom = x < edge, x > w - edge, y < edge, y > h - edge
         if top and left: self.canvas.config(cursor='top_left_corner')
         elif top and right: self.canvas.config(cursor='top_right_corner')
         elif bottom and left: self.canvas.config(cursor='bottom_left_corner')
         elif bottom and right: self.canvas.config(cursor='bottom_right_corner')
-        elif left: self.canvas.config(cursor='sb_h_double_arrow')
-        elif right: self.canvas.config(cursor='sb_h_double_arrow')
-        elif top: self.canvas.config(cursor='sb_v_double_arrow')
-        elif bottom: self.canvas.config(cursor='sb_v_double_arrow')
+        elif left or right: self.canvas.config(cursor='sb_h_double_arrow')
+        elif top or bottom: self.canvas.config(cursor='sb_v_double_arrow')
         else: self.canvas.config(cursor='fleur')
 
     def on_mouse_down(self, event):
-        self.start_x = event.x_root
-        self.start_y = event.y_root
-        self.win_start_x = self.overlay_window.winfo_x()
-        self.win_start_y = self.overlay_window.winfo_y()
-        self.win_start_w = self.overlay_window.winfo_width()
-        self.win_start_h = self.overlay_window.winfo_height()
-        
-        x, y = event.x, event.y
+        self.start_x, self.start_y = event.x_root, event.y_root
+        self.win_start_x, self.win_start_y = self.overlay_window.winfo_x(), self.overlay_window.winfo_y()
+        self.win_start_w, self.win_start_h = self.overlay_window.winfo_width(), self.overlay_window.winfo_height()
         w, h = self.win_start_w, self.win_start_h
         edge = 15
-        
-        self.resize_edge = {
-            'left': x < edge,
-            'right': x > w - edge,
-            'top': y < edge,
-            'bottom': y > h - edge 
-        }
-        
-        if any(self.resize_edge.values()):
-            self.resizing = True
-        else:
-            self.dragging = True
+        self.resize_edge = {'left': event.x < edge, 'right': event.x > w - edge, 'top': event.y < edge, 'bottom': event.y > h - edge}
+        if any(self.resize_edge.values()): self.resizing = True
+        else: self.dragging = True
 
     def on_mouse_drag(self, event):
-        dx = event.x_root - self.start_x
-        dy = event.y_root - self.start_y
-        
+        dx, dy = event.x_root - self.start_x, event.y_root - self.start_y
         if self.dragging:
-            nx = self.win_start_x + dx
-            ny = self.win_start_y + dy
-            self.overlay_window.geometry(f"+{nx}+{ny}")
+            self.overlay_window.geometry(f"+{self.win_start_x + dx}+{self.win_start_y + dy}")
             self.save_geo()
-            
         elif self.resizing:
             nx, ny, nw, nh = self.win_start_x, self.win_start_y, self.win_start_w, self.win_start_h
             if self.resize_edge['right']: nw += dx
             if self.resize_edge['bottom']: nh += dy
-            if self.resize_edge['left']:
-                nx += dx
-                nw -= dx
-            if self.resize_edge['top']:
-                ny += dy
-                nh -= dy
-            nw = max(50, nw)
-            nh = max(50, nh)
+            if self.resize_edge['left']: nx += dx; nw -= dx
+            if self.resize_edge['top']: ny += dy; nh -= dy
+            nw, nh = max(50, nw), max(50, nh)
             self.overlay_window.geometry(f"{nw}x{nh}+{nx}+{ny}")
             self.save_geo()
 
     def on_mouse_up(self, event):
-        self.dragging = False
-        self.resizing = False
+        self.dragging = False; self.resizing = False
         self.save_geo()
 
     def save_geo(self, e=None):
@@ -959,8 +946,9 @@ class KarooFish:
         if self.overlay_window: self.overlay_window.destroy(); self.overlay_window = None
 
     def exit_app(self):
-        self.main_loop_active = False
-        self.record_session() # Save on exit
+        self.fishing_active = False
+        self.reroll_active = False
+        self.record_session()
         self.destroy_overlay()
         try: keyboard.unhook_all()
         except: pass
