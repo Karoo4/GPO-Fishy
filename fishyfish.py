@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import threading
 import keyboard
 from pynput import keyboard as pynput_keyboard
@@ -9,10 +9,13 @@ import ctypes
 import dxcam
 import win32api
 import win32con
-from PIL import Image, ImageTk, ImageEnhance
+from PIL import Image, ImageTk, ImageEnhance, ImageOps, ImageDraw
 import requests
 from io import BytesIO
 import time
+import json
+import os
+from datetime import datetime
 
 # --- 1. FORCE ADMIN (Required for Clicking) ---
 def is_admin():
@@ -26,6 +29,7 @@ if not is_admin():
 # --- CONFIGURATION ---
 THEME_BG = "#0b0b0b"
 THEME_ACCENT = "#ff8d00" # Orange
+THEME_CARD = "#1a1a1a"   # Dark Grey for Profile Cards
 FONT_MAIN = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 11, "bold")
 FONT_TITLE = ("Segoe UI", 20, "bold")
@@ -35,6 +39,9 @@ FONT_AFK = ("Segoe UI", 48, "bold")
 VIVI_URL = "https://static0.srcdn.com/wordpress/wp-content/uploads/2023/10/vivi.jpg?q=49&fit=crop&w=825&dpr=2"
 DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2FX8YUuU7OpOA%2Fmaxresdefault.jpg&f=1&nofb=1&ipt=6d669298669fff2e4f438b54453c1f59c1655ca19fa2407ea1c42e471a4d7ab6"
 TITLE_LOGO_URL = "https://image2url.com/images/1765149562249-ff56b103-b5ea-4402-a896-0ed38202b804.png"
+PROFILE_ICON_URL = "https://i.pinimg.com/736x/f1/bb/3d/f1bb3d7b7b2fe3dbf46915f380043be9.jpg"
+
+STATS_FILE = "karoo_stats.json"
 
 class KarooFish:
     def __init__(self, root):
@@ -56,7 +63,7 @@ class KarooFish:
         self.recording_hotkey = None
         
         # --- FLAGS ---
-        self.is_performing_action = False # Locks detection while buying/storing/baiting
+        self.is_performing_action = False 
         self.last_cast_time = 0.0
         
         # Overlay Logic State
@@ -64,20 +71,13 @@ class KarooFish:
         self.dragging = False
         self.resizing = False
         self.resize_edge = None
-        self.start_x = 0
-        self.start_y = 0
-        self.win_start_x = 0
-        self.win_start_y = 0
-        self.win_start_w = 0
-        self.win_start_h = 0
         
         # Overlay Config
         self.border_size = 5      
-        self.title_size = 0       
         
         # Logic Config
         self.purchase_counter = 0     
-        self.total_loops_count = 0    
+        self.session_loops = 0        # Current Session Count
         self.kp = 0.1
         self.kd = 0.5
         self.previous_error = 0
@@ -109,20 +109,52 @@ class KarooFish:
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None}
         self.point_labels = {} 
 
+        # --- DATA MANAGEMENT ---
+        self.stats = self.load_stats()
+
         # Images
         self.bg_main = self.load_processed_image(VIVI_URL, 0.3)
         self.bg_afk = self.load_processed_image(DUCK_URL, 0.4)
         self.img_title = self.load_title_image(TITLE_LOGO_URL)
+        self.img_profile = self.load_circular_icon(PROFILE_ICON_URL)
 
         self.setup_ui()
         self.register_hotkeys()
 
+    # --- DATA & JSON ---
+    def load_stats(self):
+        if os.path.exists(STATS_FILE):
+            try:
+                with open(STATS_FILE, 'r') as f:
+                    return json.load(f)
+            except: pass
+        return {"total_caught": 0, "history": []}
+
+    def save_stats(self):
+        with open(STATS_FILE, 'w') as f:
+            json.dump(self.stats, f, indent=4)
+
+    def record_session(self):
+        if self.session_loops > 0:
+            self.stats["total_caught"] += self.session_loops
+            entry = {
+                "date": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "count": self.session_loops
+            }
+            # Add to history (keep last 50)
+            self.stats["history"].insert(0, entry)
+            self.stats["history"] = self.stats["history"][:50]
+            self.save_stats()
+            # Reset session
+            self.session_loops = 0
+            self.refresh_profile_ui()
+
+    # --- IMAGE HELPERS ---
     def get_dpi_scale(self):
         try: return self.root.winfo_fpixels('1i') / 96.0
         except: return 1.0
 
     def load_processed_image(self, url, darkness=0.5):
-        # Loads background wallpapers
         try:
             response = requests.get(url, timeout=5)
             img = Image.open(BytesIO(response.content))
@@ -131,7 +163,6 @@ class KarooFish:
         except: return None
 
     def load_title_image(self, url):
-        # Loads the Logo resizing it to fit width ~300px
         try:
             response = requests.get(url, timeout=5)
             img = Image.open(BytesIO(response.content))
@@ -143,19 +174,45 @@ class KarooFish:
             return ImageTk.PhotoImage(img)
         except: return None
 
+    def load_circular_icon(self, url):
+        try:
+            response = requests.get(url, timeout=5)
+            img = Image.open(BytesIO(response.content)).convert("RGBA")
+            img = img.resize((100, 100), Image.Resampling.LANCZOS)
+            
+            # Create mask for circle
+            mask = Image.new("L", (100, 100), 0)
+            draw = ImageDraw.Draw(mask)
+            draw.ellipse((0, 0, 100, 100), fill=255)
+            
+            # Create border
+            output = ImageOps.fit(img, mask.size, centering=(0.5, 0.5))
+            output.putalpha(mask)
+            
+            # Add orange border visually (optional, hard to do purely in PIL without overlay)
+            # We will handle border in Tkinter frame
+            return ImageTk.PhotoImage(output)
+        except: return None
+
     # --- UI ---
     def setup_ui(self):
         self.container = tk.Frame(self.root, bg=THEME_BG)
         self.container.pack(fill="both", expand=True)
 
+        # 1. Main Page
         self.page_main = tk.Frame(self.container, bg=THEME_BG)
         self.page_main.place(relwidth=1, relheight=1)
         if self.bg_main: tk.Label(self.page_main, image=self.bg_main, bg=THEME_BG).place(x=0, y=0, relwidth=1, relheight=1)
         self.create_main_widgets()
 
+        # 2. AFK Page
         self.page_afk = tk.Frame(self.container, bg=THEME_BG)
         if self.bg_afk: tk.Label(self.page_afk, image=self.bg_afk, bg=THEME_BG).place(x=0, y=0, relwidth=1, relheight=1)
         self.create_afk_widgets()
+
+        # 3. Profile Page
+        self.page_profile = tk.Frame(self.container, bg=THEME_BG)
+        self.create_profile_widgets()
 
     def create_main_widgets(self):
         canvas = tk.Canvas(self.page_main, bg=THEME_BG, highlightthickness=0)
@@ -169,7 +226,7 @@ class KarooFish:
         frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.bind_all("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1*(e.delta/120)), "units"))
 
-        # --- LOGO SECTION ---
+        # Logo
         if self.img_title:
             tk.Label(frame, image=self.img_title, bg=THEME_BG).pack(pady=(20, 10))
         else:
@@ -182,6 +239,10 @@ class KarooFish:
         self.loop_status.pack(pady=5)
         self.overlay_status = tk.Label(st, text="Overlay: OFF", font=FONT_MAIN, bg=THEME_BG, fg="gray")
         self.overlay_status.pack(pady=5)
+
+        # Profile Button
+        tk.Button(frame, text="View Profile & Stats", bg=THEME_CARD, fg="white", font=FONT_BOLD, relief="flat", 
+                  command=self.show_profile).pack(fill="x", padx=20, pady=(0, 10))
 
         # Auto Buy
         self.create_section(frame, "Auto Purchase")
@@ -229,12 +290,107 @@ class KarooFish:
         self.status_msg.pack(pady=20)
 
     def create_afk_widgets(self):
-        tk.Label(self.page_afk, text="AFK MODE", font=("Segoe UI", 30, "bold"), bg=THEME_BG, fg=THEME_ACCENT).place(relx=0.5, rely=0.2, anchor="center")
-        tk.Label(self.page_afk, text="Total Loops:", font=("Segoe UI", 12), bg=THEME_BG, fg="white").place(relx=0.5, rely=0.4, anchor="center")
-        self.afk_count_label = tk.Label(self.page_afk, text="0", font=FONT_AFK, bg=THEME_BG, fg=THEME_ACCENT)
-        self.afk_count_label.place(relx=0.5, rely=0.5, anchor="center")
+        # Background is already set in setup_ui
+        
+        # Container to center things
+        center_frame = tk.Frame(self.page_afk, bg=THEME_BG) 
+        # Trick: use label image as background if possible, but here we just use transparent placement
+        
+        tk.Label(self.page_afk, text="AFK MODE", font=("Segoe UI", 36, "bold"), bg=THEME_BG, fg=THEME_ACCENT).place(relx=0.5, rely=0.15, anchor="center")
+        
+        # Session Stats
+        tk.Label(self.page_afk, text="Current Session:", font=("Segoe UI", 14), bg=THEME_BG, fg="white").place(relx=0.5, rely=0.35, anchor="center")
+        self.afk_session_label = tk.Label(self.page_afk, text="0", font=("Segoe UI", 60, "bold"), bg=THEME_BG, fg=THEME_ACCENT)
+        self.afk_session_label.place(relx=0.5, rely=0.45, anchor="center")
+        
+        # Total Stats
+        tk.Label(self.page_afk, text="All Time Total:", font=("Segoe UI", 12), bg=THEME_BG, fg="gray").place(relx=0.5, rely=0.6, anchor="center")
+        self.afk_total_label = tk.Label(self.page_afk, text=f"{self.stats['total_caught']}", font=("Segoe UI", 24, "bold"), bg=THEME_BG, fg="white")
+        self.afk_total_label.place(relx=0.5, rely=0.65, anchor="center")
+
         self.afk_hint_label = tk.Label(self.page_afk, text="Press F4 to return", font=("Segoe UI", 10, "italic"), bg=THEME_BG, fg="gray")
-        self.afk_hint_label.place(relx=0.5, rely=0.8, anchor="center")
+        self.afk_hint_label.place(relx=0.5, rely=0.85, anchor="center")
+
+    def create_profile_widgets(self):
+        # BG
+        tk.Label(self.page_profile, bg=THEME_BG).place(x=0, y=0, relwidth=1, relheight=1)
+        
+        # Back Button
+        tk.Button(self.page_profile, text="← Back", bg=THEME_BG, fg="white", relief="flat", font=FONT_BOLD,
+                  command=self.show_main).pack(anchor="nw", padx=20, pady=20)
+        
+        # --- HEADER (OSU Style) ---
+        header = tk.Frame(self.page_profile, bg=THEME_CARD, height=150)
+        header.pack(fill="x", padx=20, pady=10)
+        header.pack_propagate(False)
+        
+        # Icon Frame (Orange Border)
+        icon_frame = tk.Frame(header, bg=THEME_ACCENT, width=104, height=104)
+        icon_frame.pack(side="left", padx=20)
+        icon_frame.pack_propagate(False)
+        
+        if self.img_profile:
+            tk.Label(icon_frame, image=self.img_profile, bg=THEME_ACCENT).pack(expand=True)
+        else:
+            tk.Label(icon_frame, text="IMG", bg=THEME_CARD, fg="white").pack(expand=True, fill="both")
+            
+        # User Info
+        info_frame = tk.Frame(header, bg=THEME_CARD)
+        info_frame.pack(side="left", fill="y", pady=20)
+        tk.Label(info_frame, text="Fisher", font=("Segoe UI", 24, "bold"), bg=THEME_CARD, fg="white").pack(anchor="w")
+        tk.Label(info_frame, text="The Karoo Legend", font=("Segoe UI", 10, "italic"), bg=THEME_CARD, fg=THEME_ACCENT).pack(anchor="w")
+
+        # --- STATS CARD ---
+        stats_frame = tk.Frame(self.page_profile, bg=THEME_BG)
+        stats_frame.pack(fill="x", padx=20, pady=10)
+        
+        s_card = tk.Frame(stats_frame, bg=THEME_CARD, pady=15)
+        s_card.pack(fill="x")
+        
+        tk.Label(s_card, text="TOTAL CAUGHT", font=("Segoe UI", 10, "bold"), bg=THEME_CARD, fg="gray").pack()
+        self.profile_total_label = tk.Label(s_card, text=str(self.stats['total_caught']), font=("Segoe UI", 36, "bold"), bg=THEME_CARD, fg=THEME_ACCENT)
+        self.profile_total_label.pack()
+        
+        # --- HISTORY ---
+        tk.Label(self.page_profile, text="Recent Sessions", font=FONT_BOLD, bg=THEME_BG, fg="white").pack(anchor="w", padx=20, pady=(20, 5))
+        
+        hist_frame = tk.Frame(self.page_profile, bg=THEME_CARD)
+        hist_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        
+        self.hist_list = tk.Listbox(hist_frame, bg=THEME_CARD, fg="white", font=("Consolas", 10), 
+                                    borderwidth=0, highlightthickness=0, selectbackground=THEME_ACCENT)
+        sb = ttk.Scrollbar(hist_frame, orient="vertical", command=self.hist_list.yview)
+        
+        self.hist_list.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        sb.pack(side="right", fill="y")
+        self.hist_list.config(yscrollcommand=sb.set)
+        
+        self.refresh_profile_ui()
+
+    def refresh_profile_ui(self):
+        # Update Total
+        self.profile_total_label.config(text=str(self.stats['total_caught']))
+        self.afk_total_label.config(text=str(self.stats['total_caught'] + self.session_loops))
+        
+        # Update History List
+        self.hist_list.delete(0, tk.END)
+        for entry in self.stats['history']:
+            # Format: [Date] ...... Count
+            d = entry['date']
+            c = str(entry['count'])
+            spacer = "." * (40 - len(d) - len(c))
+            self.hist_list.insert(tk.END, f"{d} {spacer} +{c}")
+
+    def show_profile(self):
+        self.refresh_profile_ui()
+        self.page_main.place_forget()
+        self.page_afk.place_forget()
+        self.page_profile.place(relwidth=1, relheight=1)
+
+    def show_main(self):
+        self.page_profile.place_forget()
+        self.page_afk.place_forget()
+        self.page_main.place(relwidth=1, relheight=1)
 
     # --- UI HELPERS ---
     def create_section(self, p, txt):
@@ -285,13 +441,13 @@ class KarooFish:
         self.afk_mode_active = not self.afk_mode_active
         if self.afk_mode_active:
             self.page_main.place_forget()
+            self.page_profile.place_forget()
             self.page_afk.place(relwidth=1, relheight=1)
             self.afk_hint_label.config(text=f"Press {self.hotkeys['toggle_afk'].upper()} to return")
         else:
             self.page_afk.place_forget()
+            self.page_profile.place_forget()
             self.page_main.place(relwidth=1, relheight=1)
-            self.total_loops_count = 0
-            self.afk_count_label.config(text="0")
 
     def toggle_loop(self):
         self.main_loop_active = not self.main_loop_active
@@ -300,7 +456,7 @@ class KarooFish:
             req = []
             if self.auto_purchase_var.get(): req.extend([1,2,4])
             if self.item_check_var.get(): req.append(5)
-            if self.auto_bait_var.get(): req.append(6) # Require Bait Point
+            if self.auto_bait_var.get(): req.append(6)
             
             if any(not self.point_coords.get(p) for p in req):
                 self.main_loop_active = False
@@ -308,9 +464,11 @@ class KarooFish:
                 return
             
             self.purchase_counter = 0
+            self.session_loops = 0 # Reset session count on start
+            self.afk_session_label.config(text="0")
+            
             self.loop_status.config(text="Main Loop: ON", fg="#00ff00")
             
-            # HIDE OVERLAY SO BOT CAN SEE
             if self.overlay_window:
                 self.overlay_window.withdraw()
                 
@@ -321,7 +479,9 @@ class KarooFish:
             self.is_performing_action = False
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             
-            # SHOW OVERLAY AGAIN
+            # SAVE STATS ON STOP
+            self.record_session()
+            
             if self.overlay_window:
                 self.overlay_window.deiconify()
 
@@ -349,13 +509,11 @@ class KarooFish:
 
     # --- MOUSE HELPERS ---
     def move_to(self, pt):
-        """Moves the mouse to coordinates WITHOUT clicking."""
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
             win32api.SetCursorPos((x, y))
             time.sleep(0.02)
-            # Force Relative Move to wake up game camera/cursor logic
             win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0)
             time.sleep(0.05)
         except Exception: pass
@@ -367,19 +525,13 @@ class KarooFish:
         try:
             x, y = int(pt[0]), int(pt[1])
             print(f"Clicking: {debug_name} at {x},{y}")
-            # 1. Move
             win32api.SetCursorPos((x, y))
             time.sleep(0.02)
-            # 2. Force Relative Move
             win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0)
             time.sleep(0.05)
-            # 3. Down
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            # 4. Hold
             time.sleep(hold_time) 
-            # 5. Up
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            # 6. Recovery
             time.sleep(0.05)
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
@@ -388,40 +540,29 @@ class KarooFish:
     def perform_auto_purchase_sequence(self):
         try:
             print("--- START AUTO BUY ---")
-            self.is_performing_action = True # BLOCK CASTING
+            self.is_performing_action = True 
             
             if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]):
-                print("Missing coords for purchase")
                 return
 
-            print("Pressing E to open shop...")
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
-            
             self.click(self.point_coords[1], "Pt 1 (Yes)")
             time.sleep(self.purchase_click_delay)
-            
             self.click(self.point_coords[2], "Pt 2 (Input)")
             time.sleep(self.purchase_click_delay)
-            
             keyboard.write(str(self.amount_var.get()))
             time.sleep(self.purchase_after_type_delay)
-            
             self.click(self.point_coords[1], "Pt 1 (Confirm)")
             time.sleep(self.purchase_click_delay)
-            
             self.click(self.point_coords[2], "Pt 2 (Safety)")
             time.sleep(self.purchase_click_delay)
-            
-            # JUST MOVE to Ocean, don't click yet.
             self.move_to(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
             
             print("--- END AUTO BUY ---")
-            
         except Exception as e: print(f"Purchase Error: {e}")
-        finally:
-            self.is_performing_action = False # UNBLOCK CASTING
+        finally: self.is_performing_action = False
 
     def perform_store_fruit(self):
         p5 = self.point_coords.get(5)
@@ -434,98 +575,79 @@ class KarooFish:
             img = self.camera.get_latest_frame()
             if img is None: return False
             if chk_y >= img.shape[0] or chk_x >= img.shape[1]: return False
-            
-            b, g, r = img[chk_y, chk_x] # BGR format
-            match_r = r > 230
-            match_g = 70 < g < 130
-            match_b = 70 < b < 130
-            return match_r and match_g and match_b
+            b, g, r = img[chk_y, chk_x] 
+            # Check for red warning
+            return (r > 230) and (70 < g < 130) and (70 < b < 130)
 
         try:
-            print("--- AUTO STORE SEQUENCE ---")
-            self.is_performing_action = True # BLOCK CASTING
+            print("--- AUTO STORE SEQUENCE (UPDATED) ---")
+            self.is_performing_action = True 
 
-            # 1. Equip potential fruit
-            keyboard.press_and_release('3')
-            time.sleep(self.clean_step_delay)
-
-            # 2. Click Store Button
-            self.click(p5, "Pt 5 (Store Fruit)")
-            time.sleep(self.clean_step_delay) # Wait for text to appear
-
-            # 3. Check specific pixel for #ff6666
-            if check_red_pixel():
-                print("Duplicate Fruit Detected (#ff6666 found). Deleting...")
-                keyboard.press_and_release('backspace')
-                time.sleep(self.clean_step_delay)
-            else:
-                print("Fruit Stored (or Empty/No Warning).")
-
-            # 4. RESET EQUIPMENT (CRITICAL FIX FOR ROD)
-            # Switch to '1' first (Combat/Fist) to clear hands
-            keyboard.press_and_release('1')
-            time.sleep(self.clean_step_delay)
-            
-            # Switch to '2' (Rod).
+            # 1. Press 2 (Unequip Rod as per instruction)
             keyboard.press_and_release('2')
+            time.sleep(0.5)
+
+            # 2. Click Store Button (Pt 5)
+            self.click(p5, "Pt 5 (Store Fruit)")
             time.sleep(self.clean_step_delay)
+
+            # 3. Check Red Pixel (Warning/Fruit not there)
+            if check_red_pixel():
+                print("Pixel is RED (Fruit not valid/Warning).")
+                # Prompt says: "if specified pixel is red then press 2 afterwards"
+            else:
+                print("Pixel NOT Red (Stored successfully or no warning).")
+
+            # 4. Press 2 (Re-equip Rod)
+            keyboard.press_and_release('2')
+            time.sleep(0.5)
             
-            # 5. Reset mouse to Ocean (Pt 4) WITHOUT CLICKING
+            # 5. Move to Ocean
             self.move_to(self.point_coords[4])
-            time.sleep(self.clean_step_delay)
+            time.sleep(0.2)
             
         except Exception as e: 
             print(f"Store Error: {e}")
-            keyboard.press_and_release('1')
-            time.sleep(0.5)
             keyboard.press_and_release('2')
         finally:
-            self.is_performing_action = False # UNBLOCK CASTING
+            self.is_performing_action = False
 
     def perform_bait_select(self):
         if not self.auto_bait_var.get(): return
-        
         p6 = self.point_coords.get(6)
         if not p6: return
 
         try:
             print("--- AUTO BAIT SELECT ---")
-            self.is_performing_action = True # Block casting
-            
-            # 1. Click the Bait Location
+            self.is_performing_action = True 
             self.click(p6, "Pt 6 (Bait Select)")
             time.sleep(0.5) 
-            
-            # 2. Move Cursor back to Ocean (Pt 4)
             self.move_to(self.point_coords[4])
             time.sleep(0.2)
-            
-            print("--- BAIT SELECTED ---")
-        except Exception as e:
-            print(f"Bait Error: {e}")
-        finally:
-            self.is_performing_action = False # Unblock
+        except Exception as e: print(f"Bait Error: {e}")
+        finally: self.is_performing_action = False
 
     def cast(self):
-        if self.is_performing_action: return # Double check
+        if self.is_performing_action: return 
         
-        # Cast uses a long hold (1.0s)
         self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
         self.is_clicking = False
-        self.total_loops_count += 1
-        
-        # --- CRITICAL UPDATE: Update Last Cast Time ---
+        self.session_loops += 1
         self.last_cast_time = time.time()
         
-        if self.afk_mode_active: self.root.after(0, lambda: self.afk_count_label.config(text=str(self.total_loops_count)))
-        
+        # Update UI Labels
+        if self.afk_mode_active:
+             self.root.after(0, lambda: self.afk_session_label.config(text=str(self.session_loops)))
+             # Calculate total for display on the fly
+             current_total = self.stats['total_caught'] + self.session_loops
+             self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
+
         self.previous_error = 0
         time.sleep(0.5)
 
     def run_loop(self):
-        print("Main Loop started (Using Original Detection + SAFETY LOCK)")
-        
-        target_color = (0x55, 0xaa, 0xff)  # RGB
+        print("Main Loop started")
+        target_color = (0x55, 0xaa, 0xff) 
         dark_color = (0x19, 0x19, 0x19)
         white_color = (0xff, 0xff, 0xff)
 
@@ -534,7 +656,6 @@ class KarooFish:
         self.camera.start(target_fps=60, video_mode=True)
 
         try:
-            # Initial Sequence
             if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
             self.cast()
             
@@ -542,7 +663,6 @@ class KarooFish:
             was_detecting = False
 
             while self.main_loop_active:
-                # --- INTERFERENCE CHECK ---
                 if self.is_performing_action:
                     time.sleep(0.1)
                     continue
@@ -557,11 +677,10 @@ class KarooFish:
 
                 img = img[y:y+height, x:x+width]
 
-                # 1. Find Point 1 (Left Blue Edge)
+                # 1. Detection Logic (Simplified for brevity - same as before)
                 point1_x = None
                 point1_y = None
                 found_first = False
-                
                 for row_idx in range(height):
                     for col_idx in range(width):
                         b, g, r = img[row_idx, col_idx, 0:3]
@@ -574,7 +693,6 @@ class KarooFish:
 
                 if not found_first:
                     current_time = time.time()
-                    
                     if was_detecting:
                         print("Lost detection (Game Over).")
                         time.sleep(self.wait_after_loss)
@@ -583,23 +701,15 @@ class KarooFish:
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         
                         # --- POST-GAME LOGIC ---
-                        
-                        # 1. Purchase
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
                                 self.perform_auto_purchase_sequence()
                                 self.purchase_counter = 0
                         
-                        # 2. Store Fruit
-                        if self.item_check_var.get(): 
-                            self.perform_store_fruit()
-                            
-                        # 3. Auto Bait
-                        if self.auto_bait_var.get():
-                            self.perform_bait_select()
+                        if self.item_check_var.get(): self.perform_store_fruit()
+                        if self.auto_bait_var.get(): self.perform_bait_select()
                         
-                        # 4. Final Cast
                         self.cast()
                         last_detection_time = time.time()
                         
@@ -609,11 +719,10 @@ class KarooFish:
                         if self.auto_bait_var.get(): self.perform_bait_select()
                         self.cast()
                         last_detection_time = time.time()
-                    
                     time.sleep(0.1)
                     continue
 
-                # 2. Find Point 2 (Right Blue Edge)
+                # 2. Right Edge
                 point2_x = None
                 row_idx = point1_y - y
                 for col_idx in range(width - 1, -1, -1):
@@ -626,10 +735,9 @@ class KarooFish:
                     time.sleep(0.01)
                     continue
 
-                # 3. Define Real Area
-                temp_area_x = point1_x
+                # 3. Bar Calculation
                 temp_area_width = point2_x - point1_x + 1
-                temp_x_offset = temp_area_x - x
+                temp_x_offset = point1_x - x
                 temp_img = img[:, temp_x_offset:temp_x_offset + temp_area_width]
 
                 top_y = None
@@ -658,11 +766,9 @@ class KarooFish:
                     time.sleep(0.1)
                     continue
 
-                # 4. Check White Target
+                # 4. White Target
                 real_height = bottom_y - top_y + 1
-                real_x_offset = temp_x_offset
-                real_y_offset = top_y - y
-                real_img = img[real_y_offset:real_y_offset+real_height, real_x_offset:real_x_offset+temp_area_width]
+                real_img = img[top_y-y:top_y-y+real_height, temp_x_offset:temp_x_offset+temp_area_width]
                 
                 white_top_y = None
                 for r_idx in range(real_height):
@@ -675,7 +781,7 @@ class KarooFish:
 
                 if white_top_y is None: continue
 
-                # 5. FIND THE SLIDER
+                # 5. Slider Logic
                 dark_sections = []
                 current_section_start = None
                 gap_counter = 0
@@ -712,26 +818,23 @@ class KarooFish:
                         'size': section_end - current_section_start
                     })
 
-                # --- 6. LOGIC & SAFETY LOCK ---
+                # --- CONTROL LOGIC ---
                 if dark_sections and white_top_y is not None:
                     was_detecting = True
                     last_detection_time = time.time()
                     
                     largest_section = max(dark_sections, key=lambda s: s['size'])
-                    
                     raw_error = largest_section['middle'] - white_top_y
                     normalized_error = raw_error / real_height if real_height > 0 else raw_error
-                    
                     derivative = normalized_error - self.previous_error
                     self.previous_error = normalized_error
                     
                     pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
                     
-                    # === CRITICAL SAFETY CHECK ===
                     time_since_cast = time.time() - self.last_cast_time
                     
                     if pd_output > 0:
-                        if time_since_cast > 3.0: # ONLY CLICK IF SAFE
+                        if time_since_cast > 3.0: 
                             if not self.is_clicking:
                                 win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
                                 self.is_clicking = True
@@ -750,7 +853,7 @@ class KarooFish:
                 win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                 self.is_clicking = False
 
-    # --- OVERLAY ---
+    # --- OVERLAY (Fixed Dragging) ---
     def toggle_overlay(self):
         self.overlay_active = not self.overlay_active
         if self.overlay_active:
@@ -765,38 +868,22 @@ class KarooFish:
         self.overlay_window = tk.Toplevel(self.root)
         self.overlay_window.overrideredirect(True)
         self.overlay_window.attributes('-topmost', True)
-        
-        # Filled Transparent Box (30% Opacity)
         self.overlay_window.attributes('-alpha', 0.3) 
-        
         self.overlay_window.geometry(f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}")
-        
-        # Filled with Theme Accent
         self.overlay_window.configure(bg=THEME_ACCENT)
 
-        # Create canvas for border (and interaction)
-        self.canvas = tk.Canvas(self.overlay_window, bg=THEME_ACCENT, 
-                                highlightthickness=self.border_size, 
-                                highlightbackground=THEME_ACCENT)
+        self.canvas = tk.Canvas(self.overlay_window, bg=THEME_ACCENT, highlightthickness=self.border_size, highlightbackground=THEME_ACCENT)
         self.canvas.pack(fill='both', expand=True)
 
-        # Bind events
         self.canvas.bind('<Button-1>', self.on_mouse_down)
         self.canvas.bind('<B1-Motion>', self.on_mouse_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_mouse_up)
         self.canvas.bind('<Motion>', self.on_mouse_move)
-        
-        self.resizing = False
-        self.dragging = False
-        self.resize_edge = None
-        self.start_x = 0
-        self.start_y = 0
 
     def on_mouse_move(self, event):
         x, y = event.x, event.y
         w = self.overlay_window.winfo_width()
         h = self.overlay_window.winfo_height()
-        
         edge = 15
         left = x < edge
         right = x > w - edge
@@ -829,7 +916,7 @@ class KarooFish:
             'left': x < edge,
             'right': x > w - edge,
             'top': y < edge,
-            'bottom': y > h - edge
+            'bottom': y > h - edge 
         }
         
         if any(self.resize_edge.values()):
@@ -849,7 +936,6 @@ class KarooFish:
             
         elif self.resizing:
             nx, ny, nw, nh = self.win_start_x, self.win_start_y, self.win_start_w, self.win_start_h
-            
             if self.resize_edge['right']: nw += dx
             if self.resize_edge['bottom']: nh += dy
             if self.resize_edge['left']:
@@ -858,7 +944,6 @@ class KarooFish:
             if self.resize_edge['top']:
                 ny += dy
                 nh -= dy
-                
             nw = max(50, nw)
             nh = max(50, nh)
             self.overlay_window.geometry(f"{nw}x{nh}+{nx}+{ny}")
@@ -879,6 +964,7 @@ class KarooFish:
 
     def exit_app(self):
         self.main_loop_active = False
+        self.record_session() # Save on exit
         self.destroy_overlay()
         try: keyboard.unhook_all()
         except: pass
