@@ -16,7 +16,7 @@ import time
 import json
 import os
 from datetime import datetime
-import numpy as np
+import numpy as np # Required for black screen check
 
 # --- 1. FORCE ADMIN ---
 def is_admin():
@@ -97,10 +97,10 @@ class KarooFish:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         
-        # --- FIX: STRICT LAZY LOADING ---
-        # Do NOT initialize dxcam here. It breaks keybinds.
+        # IMPORTANT: Initialize camera as None. 
+        # Creating DXCam here freezes keybind hooks. We lazy-load it later.
         self.camera = None
-
+        
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         self.point_labels = {} 
 
@@ -113,10 +113,10 @@ class KarooFish:
 
         self.setup_ui()
         
-        # Load Config first
+        # Load Config AFTER UI is created (so vars exist)
         self.load_config()
-
-        # Register hotkeys 
+        
+        # Register Hotkeys AFTER config is loaded
         self.register_hotkeys()
         
         # Auto AFK Monitor
@@ -125,23 +125,31 @@ class KarooFish:
         self.root.bind_all("<Motion>", self.reset_afk_timer)
         self.check_auto_afk()
 
-    # --- DATA & PERSISTENCE ---
+    # --- DATA & CONFIG ---
     def load_config(self):
         if not os.path.exists(CONFIG_FILE): return
         try:
             with open(CONFIG_FILE, 'r') as f:
                 data = json.load(f)
-                
+            
             # Load Points
-            saved_points = data.get("points", {})
-            for k, v in saved_points.items():
-                if v: # Ensure valid list/tuple
-                    idx = int(k)
-                    self.point_coords[idx] = tuple(v)
-                    if idx in self.point_labels:
-                        self.point_labels[idx].config(text=f"{v[0]},{v[1]}", fg="#00ff00")
+            if "points" in data:
+                for k, v in data["points"].items():
+                    if v:
+                        idx = int(k)
+                        self.point_coords[idx] = tuple(v)
+                        if idx in self.point_labels:
+                            self.point_labels[idx].config(text=f"{v[0]},{v[1]}", fg="#00ff00")
+            
+            # Load Hotkeys
+            if "hotkeys" in data:
+                self.hotkeys.update(data["hotkeys"])
+                # Update UI labels
+                for k, v in self.hotkeys.items():
+                    if hasattr(self, f"lbl_{k}"):
+                        getattr(self, f"lbl_{k}").config(text=v.upper())
 
-            # Load Variables
+            # Load Settings
             if "auto_purchase" in data: self.auto_purchase_var.set(data["auto_purchase"])
             if "amount" in data: self.amount_var.set(data["amount"])
             if "loops" in data: self.loops_var.set(data["loops"])
@@ -153,48 +161,45 @@ class KarooFish:
             if "kd" in data: self.kd_var.set(data["kd"])
             if "timeout" in data: self.timeout_var.set(data["timeout"])
             
-            # Load Hotkeys
-            if "hotkeys" in data and isinstance(data["hotkeys"], dict):
-                for k, v in data["hotkeys"].items():
-                    if k in self.hotkeys and v:
-                        self.hotkeys[k] = v
-                # Update labels in UI
-                for k, v in self.hotkeys.items():
-                    if hasattr(self, f"lbl_{k}"):
-                        getattr(self, f"lbl_{k}").config(text=v.upper())
-
-            print("Configuration Loaded.")
+            print("Config loaded successfully.")
         except Exception as e:
             print(f"Error loading config: {e}")
 
     def save_config(self):
+        data = {
+            "points": self.point_coords,
+            "hotkeys": self.hotkeys,
+            "auto_purchase": self.auto_purchase_var.get(),
+            "amount": self.amount_var.get(),
+            "loops": self.loops_var.get(),
+            "item_check": self.item_check_var.get(),
+            "auto_bait": self.auto_bait_var.get(),
+            "auto_afk": self.auto_afk_var.get(),
+            "afk_seconds": self.auto_afk_seconds_var.get(),
+            "kp": self.kp_var.get(),
+            "kd": self.kd_var.get(),
+            "timeout": self.timeout_var.get()
+        }
         try:
-            data = {
-                "points": self.point_coords,
-                "hotkeys": self.hotkeys,
-                "auto_purchase": self.auto_purchase_var.get(),
-                "amount": self.amount_var.get(),
-                "loops": self.loops_var.get(),
-                "item_check": self.item_check_var.get(),
-                "auto_bait": self.auto_bait_var.get(),
-                "auto_afk": self.auto_afk_var.get(),
-                "afk_seconds": self.auto_afk_seconds_var.get(),
-                "kp": self.kp_var.get(),
-                "kd": self.kd_var.get(),
-                "timeout": self.timeout_var.get()
-            }
             with open(CONFIG_FILE, 'w') as f:
                 json.dump(data, f, indent=4)
-            self.status_msg.config(text="Configuration Saved!", fg="#00ff00")
+            self.status_msg.config(text="Settings Saved!", fg="#00ff00")
         except Exception as e:
             self.status_msg.config(text="Save Failed", fg="red")
-            print(f"Save error: {e}")
+            print(f"Save Error: {e}")
 
     def reset_defaults(self):
+        # Reset Logic
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         for idx, lbl in self.point_labels.items():
             lbl.config(text="Not Set", fg="red")
         
+        self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
+        for k, v in self.hotkeys.items():
+            if hasattr(self, f"lbl_{k}"):
+                getattr(self, f"lbl_{k}").config(text=v.upper())
+        self.register_hotkeys()
+
         self.auto_purchase_var.set(False)
         self.amount_var.set(10)
         self.loops_var.set(10)
@@ -206,15 +211,8 @@ class KarooFish:
         self.kd_var.set(0.5)
         self.timeout_var.set(15.0)
         
-        # Reset hotkeys
-        self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
-        for k, v in self.hotkeys.items():
-            if hasattr(self, f"lbl_{k}"):
-                getattr(self, f"lbl_{k}").config(text=v.upper())
-        self.register_hotkeys()
-        
-        self.status_msg.config(text="Restored Defaults", fg=THEME_ACCENT)
         self.save_config()
+        self.status_msg.config(text="Defaults Restored", fg=THEME_ACCENT)
 
     # --- HELPERS ---
     def get_dpi_scale(self):
@@ -395,17 +393,13 @@ class KarooFish:
         self.create_section(frame, "Hotkeys")
         for k, label in [('toggle_loop', 'Loop'), ('toggle_overlay', 'Overlay'), ('toggle_afk', 'AFK'), ('exit', 'Exit')]:
             self.create_hotkey_row(frame, label, k)
-            
-        # --- SAVE / RESTORE SECTION ---
-        self.create_section(frame, "Configuration")
-        btn_row = tk.Frame(frame, bg=THEME_BG)
-        btn_row.pack(fill="x", padx=20, pady=5)
         
-        tk.Button(btn_row, text="Save Settings", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 9, "bold"), 
-                  command=self.save_config, width=15, relief="flat").pack(side="left", padx=(0, 10))
-                  
-        tk.Button(btn_row, text="Reset Defaults", bg="#202020", fg="white", font=("Segoe UI", 9), 
-                  command=self.reset_defaults, width=15, relief="flat").pack(side="left")
+        # --- SAVE CONTROLS ---
+        self.create_section(frame, "Configuration")
+        btn_frame = tk.Frame(frame, bg=THEME_BG)
+        btn_frame.pack(fill="x", padx=20)
+        tk.Button(btn_frame, text="Save Settings", bg=THEME_ACCENT, fg="black", font=FONT_BOLD, command=self.save_config).pack(side="left", padx=(0, 10))
+        tk.Button(btn_frame, text="Reset Defaults", bg="#202020", fg="white", font=FONT_MAIN, command=self.reset_defaults).pack(side="left")
 
         self.status_msg = tk.Label(frame, text="", bg=THEME_BG, fg=THEME_ACCENT)
         self.status_msg.pack(pady=20)
@@ -557,12 +551,12 @@ class KarooFish:
         try:
             keyboard.unhook_all()
             for k, f in [('toggle_loop', self.toggle_loop), ('toggle_overlay', self.toggle_overlay), ('toggle_afk', self.toggle_afk), ('exit', self.exit_app)]:
-                # Use current hotkey config
+                # Use saved key if available
                 key_name = self.hotkeys.get(k, '')
                 if key_name:
                     keyboard.add_hotkey(key_name, lambda f=f: self.root.after(0, f))
         except Exception as e:
-            print(f"Failed to register hotkeys: {e}")
+            print(f"Hotkey Registration Failed: {e}")
 
     def toggle_afk(self):
         self.afk_mode_active = not self.afk_mode_active
@@ -591,7 +585,7 @@ class KarooFish:
         self.fishing_active = not self.fishing_active
         if self.fishing_active:
             req = []
-            if self.auto_purchase_var.get(): req.extend([1,2,3,4]) 
+            if self.auto_purchase_var.get(): req.extend([1,2,3,4]) # Added Pt3 as required for Auto Buy
             if self.item_check_var.get(): req.extend([5,7])
             if self.auto_bait_var.get(): req.append(6)
             
@@ -682,7 +676,7 @@ class KarooFish:
             self.is_performing_action = True 
             if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]): return
             
-            # 1. Standard Buy Sequence
+            # 1. Standard Purchase Flow
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
             self.click(self.point_coords[1], "Pt 1 (Yes)")
@@ -698,20 +692,26 @@ class KarooFish:
             self.move_to(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
 
-            # 2. Check Pt 3 for "No" (Red)
+            # 2. Check Pt 3 for "Red" (Menu Stuck Open)
             if self.point_coords[3]:
+                # Capture a single frame to check color
+                # If camera is running (it should be), grab latest. If not, fallback.
                 frame = None
                 if self.camera and self.camera.is_capturing:
-                     frame = self.camera.get_latest_frame()
+                    frame = self.camera.get_latest_frame()
                 else:
-                    if not self.camera: self.camera = dxcam.create(output_color="BGR")
-                    frame = self.camera.grab()
+                    # Temporary fallback grabber
+                    tmp_cam = dxcam.create(output_color="BGR")
+                    frame = tmp_cam.grab()
+                    del tmp_cam
 
                 if frame is not None:
                     p3 = self.point_coords[3]
                     cx, cy = int(p3[0]), int(p3[1])
                     if cy < frame.shape[0] and cx < frame.shape[1]:
+                        # BGR Check
                         b, g, r = frame[cy, cx]
+                        # Red is (0, 0, 255). Tolerance included.
                         if r > 200 and g < 50 and b < 50:
                             print("Red detected at Pt 3 (Menu stuck). Forcing close.")
                             self.click(p3, "Pt 3 (Force Close)")
@@ -793,6 +793,7 @@ class KarooFish:
         dark_color = (0x19, 0x19, 0x19)
         white_color = (0xff, 0xff, 0xff)
 
+        # Lazy Load Camera (Safe for Keybinds)
         if self.camera is None: 
             try: self.camera = dxcam.create(output_color="BGR")
             except: pass
@@ -813,7 +814,7 @@ class KarooFish:
 
                 img_full = self.camera.get_latest_frame()
                 
-                # Black screen fix
+                # --- BLACK SCREEN CHECK ---
                 if img_full is None:
                     time.sleep(0.01)
                     continue
@@ -825,6 +826,7 @@ class KarooFish:
                     self.camera.start(target_fps=60, video_mode=True)
                     time.sleep(0.5)
                     continue
+                # --------------------------
 
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 width, height = self.overlay_area['width'], self.overlay_area['height']
@@ -994,15 +996,16 @@ class KarooFish:
         except Exception as e:
             print(f"Error in fishing loop: {e}")
         finally:
-            self.camera.stop()
+            if self.camera: self.camera.stop()
             if self.is_clicking:
                 win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                 self.is_clicking = False
-            self.save_config() # Auto-save on stop
+            self.save_config()
 
     def run_reroll_loop(self):
         print("Reroll Loop Started")
         
+        # Lazy Load Camera
         if self.camera is None: 
             try: self.camera = dxcam.create(output_color="BGR")
             except: pass
@@ -1019,7 +1022,7 @@ class KarooFish:
                     time.sleep(0.01)
                     continue
                 
-                # Black screen check
+                # Black Screen Check
                 if np.sum(img) == 0:
                     self.camera.stop()
                     time.sleep(0.5)
@@ -1038,8 +1041,78 @@ class KarooFish:
         except Exception as e:
             print(f"Error in reroll loop: {e}")
         finally:
-            self.camera.stop()
+            if self.camera: self.camera.stop()
             self.save_config()
+
+    # --- OVERLAY ---
+    def toggle_overlay(self):
+        self.overlay_active = not self.overlay_active
+        if self.overlay_active:
+            self.overlay_status.config(text="Overlay: ON", fg=THEME_ACCENT)
+            self.create_overlay()
+        else:
+            self.overlay_status.config(text="Overlay: OFF", fg="gray")
+            self.destroy_overlay()
+
+    def create_overlay(self):
+        if self.overlay_window: return
+        self.overlay_window = tk.Toplevel(self.root)
+        self.overlay_window.overrideredirect(True)
+        self.overlay_window.attributes('-topmost', True)
+        self.overlay_window.attributes('-alpha', 0.3) 
+        self.overlay_window.geometry(f"{self.overlay_area['width']}x{self.overlay_area['height']}+{self.overlay_area['x']}+{self.overlay_area['y']}")
+        self.overlay_window.configure(bg=THEME_ACCENT)
+
+        self.canvas = tk.Canvas(self.overlay_window, bg=THEME_ACCENT, highlightthickness=self.border_size, highlightbackground=THEME_ACCENT)
+        self.canvas.pack(fill='both', expand=True)
+
+        self.canvas.bind('<Button-1>', self.on_mouse_down)
+        self.canvas.bind('<B1-Motion>', self.on_mouse_drag)
+        self.canvas.bind('<ButtonRelease-1>', self.on_mouse_up)
+        self.canvas.bind('<Motion>', self.on_mouse_move)
+
+    def on_mouse_move(self, event):
+        x, y = event.x, event.y
+        w = self.overlay_window.winfo_width()
+        h = self.overlay_window.winfo_height()
+        edge = 15
+        left, right, top, bottom = x < edge, x > w - edge, y < edge, y > h - edge
+        if top and left: self.canvas.config(cursor='top_left_corner')
+        elif top and right: self.canvas.config(cursor='top_right_corner')
+        elif bottom and left: self.canvas.config(cursor='bottom_left_corner')
+        elif bottom and right: self.canvas.config(cursor='bottom_right_corner')
+        elif left or right: self.canvas.config(cursor='sb_h_double_arrow')
+        elif top or bottom: self.canvas.config(cursor='sb_v_double_arrow')
+        else: self.canvas.config(cursor='fleur')
+
+    def on_mouse_down(self, event):
+        self.start_x, self.start_y = event.x_root, event.y_root
+        self.win_start_x, self.win_start_y = self.overlay_window.winfo_x(), self.overlay_window.winfo_y()
+        self.win_start_w, self.win_start_h = self.overlay_window.winfo_width(), self.overlay_window.winfo_height()
+        w, h = self.win_start_w, self.win_start_h
+        edge = 15
+        self.resize_edge = {'left': event.x < edge, 'right': event.x > w - edge, 'top': event.y < edge, 'bottom': event.y > h - edge}
+        if any(self.resize_edge.values()): self.resizing = True
+        else: self.dragging = True
+
+    def on_mouse_drag(self, event):
+        dx, dy = event.x_root - self.start_x, event.y_root - self.start_y
+        if self.dragging:
+            self.overlay_window.geometry(f"+{self.win_start_x + dx}+{self.win_start_y + dy}")
+            self.save_geo()
+        elif self.resizing:
+            nx, ny, nw, nh = self.win_start_x, self.win_start_y, self.win_start_w, self.win_start_h
+            if self.resize_edge['right']: nw += dx
+            if self.resize_edge['bottom']: nh += dy
+            if self.resize_edge['left']: nx += dx; nw -= dx
+            if self.resize_edge['top']: ny += dy; nh -= dy
+            nw, nh = max(50, nw), max(50, nh)
+            self.overlay_window.geometry(f"{nw}x{nh}+{nx}+{ny}")
+            self.save_geo()
+
+    def on_mouse_up(self, event):
+        self.dragging = False; self.resizing = False
+        self.save_geo()
 
     def save_geo(self, e=None):
         if self.overlay_window:
