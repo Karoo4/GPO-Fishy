@@ -176,6 +176,15 @@ class KarooFish:
             self.session_loops = 0
             self.refresh_profile_ui()
 
+    def delete_selected_session(self):
+        selection = self.hist_list.curselection()
+        if not selection: return
+        index = selection[0]
+        if 0 <= index < len(self.stats['history']):
+            del self.stats['history'][index]
+            self.save_stats()
+            self.refresh_profile_ui()
+
     # --- UI SETUP ---
     def setup_ui(self):
         # Configure Notebook Style
