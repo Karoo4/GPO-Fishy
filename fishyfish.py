@@ -97,12 +97,8 @@ class KarooFish:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         
-        # Initialize Camera
-        try:
-            self.camera = dxcam.create(output_color="BGR")
-        except Exception as e:
-            print(f"Camera Init Error: {e}")
-            self.camera = None
+        # Camera is now Lazy-Loaded (Created only when loop starts)
+        self.camera = None
 
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         self.point_labels = {} 
@@ -119,8 +115,8 @@ class KarooFish:
         # Load Config first
         self.load_config()
 
-        # Register hotkeys with a slight delay to ensure UI is ready
-        self.root.after(500, self.register_hotkeys)
+        # Register hotkeys
+        self.root.after(100, self.register_hotkeys)
         
         # Auto AFK Monitor
         self.root.bind_all("<Any-KeyPress>", self.reset_afk_timer)
@@ -138,10 +134,11 @@ class KarooFish:
             # Load Points
             saved_points = data.get("points", {})
             for k, v in saved_points.items():
-                idx = int(k)
-                self.point_coords[idx] = tuple(v)
-                if idx in self.point_labels:
-                    self.point_labels[idx].config(text=f"{v[0]},{v[1]}", fg="#00ff00")
+                if v: # Ensure valid list/tuple
+                    idx = int(k)
+                    self.point_coords[idx] = tuple(v)
+                    if idx in self.point_labels:
+                        self.point_labels[idx].config(text=f"{v[0]},{v[1]}", fg="#00ff00")
 
             # Load Variables
             if "auto_purchase" in data: self.auto_purchase_var.set(data["auto_purchase"])
@@ -156,9 +153,11 @@ class KarooFish:
             if "timeout" in data: self.timeout_var.set(data["timeout"])
             
             # Load Hotkeys
-            if "hotkeys" in data:
-                self.hotkeys.update(data["hotkeys"])
-                # Update labels
+            if "hotkeys" in data and isinstance(data["hotkeys"], dict):
+                for k, v in data["hotkeys"].items():
+                    if k in self.hotkeys and v:
+                        self.hotkeys[k] = v
+                # Update labels in UI
                 for k, v in self.hotkeys.items():
                     if hasattr(self, f"lbl_{k}"):
                         getattr(self, f"lbl_{k}").config(text=v.upper())
@@ -554,11 +553,15 @@ class KarooFish:
         self.root.after(1000, self.check_auto_afk)
 
     def register_hotkeys(self):
-        try:
-            keyboard.unhook_all()
-            for k, f in [('toggle_loop', self.toggle_loop), ('toggle_overlay', self.toggle_overlay), ('toggle_afk', self.toggle_afk), ('exit', self.exit_app)]:
-                keyboard.add_hotkey(self.hotkeys[k], lambda f=f: self.root.after(0, f))
-        except: pass
+        keyboard.unhook_all()
+        for k, f in [('toggle_loop', self.toggle_loop), ('toggle_overlay', self.toggle_overlay), ('toggle_afk', self.toggle_afk), ('exit', self.exit_app)]:
+            try:
+                # Use current hotkey config
+                key_name = self.hotkeys.get(k, '')
+                if key_name:
+                    keyboard.add_hotkey(key_name, lambda f=f: self.root.after(0, f))
+            except Exception as e:
+                print(f"Failed to register hotkey {k}: {e}")
 
     def toggle_afk(self):
         self.afk_mode_active = not self.afk_mode_active
