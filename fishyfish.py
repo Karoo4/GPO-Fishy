@@ -66,6 +66,9 @@ class KarooFish:
         self.is_performing_action = False 
         self.last_cast_time = 0.0
         
+        # --- AUTO AFK STATE ---
+        self.last_user_activity = time.time()
+        
         # Overlay Logic State
         self.resize_threshold = 10
         self.dragging = False
@@ -120,6 +123,29 @@ class KarooFish:
 
         self.setup_ui()
         self.register_hotkeys()
+        
+        # --- BIND ACTIVITY & START CHECKER ---
+        self.root.bind_all("<Any-KeyPress>", self.reset_afk_timer)
+        self.root.bind_all("<Any-ButtonPress>", self.reset_afk_timer)
+        self.root.bind_all("<Motion>", self.reset_afk_timer)
+        self.check_auto_afk()
+
+    # --- AUTO AFK LOGIC ---
+    def reset_afk_timer(self, event=None):
+        self.last_user_activity = time.time()
+
+    def check_auto_afk(self):
+        # Only switch to AFK if:
+        # 1. Auto AFK is enabled
+        # 2. Main Loop is ON (Bot is running)
+        # 3. We are not already in AFK mode
+        if self.auto_afk_var.get() and self.main_loop_active and not self.afk_mode_active:
+            idle_time = time.time() - self.last_user_activity
+            if idle_time > self.auto_afk_seconds_var.get():
+                self.toggle_afk()
+        
+        # Check every 1 second
+        self.root.after(1000, self.check_auto_afk)
 
     # --- DATA & JSON ---
     def load_stats(self):
@@ -147,6 +173,20 @@ class KarooFish:
             self.save_stats()
             # Reset session
             self.session_loops = 0
+            self.refresh_profile_ui()
+
+    def delete_selected_session(self):
+        # Get selected index
+        selection = self.hist_list.curselection()
+        if not selection:
+            return
+        
+        index = selection[0]
+        
+        # Remove from data list
+        if 0 <= index < len(self.stats['history']):
+            del self.stats['history'][index]
+            self.save_stats()
             self.refresh_profile_ui()
 
     # --- IMAGE HELPERS ---
@@ -178,20 +218,24 @@ class KarooFish:
         try:
             response = requests.get(url, timeout=5)
             img = Image.open(BytesIO(response.content)).convert("RGBA")
-            img = img.resize((100, 100), Image.Resampling.LANCZOS)
             
-            # Create mask for circle
-            mask = Image.new("L", (100, 100), 0)
+            # 1. Resize/Fit to Square
+            size = (100, 100)
+            img = ImageOps.fit(img, size, centering=(0.5, 0.5))
+            
+            # 2. Create Circle Mask
+            mask = Image.new("L", size, 0)
             draw = ImageDraw.Draw(mask)
-            draw.ellipse((0, 0, 100, 100), fill=255)
+            draw.ellipse((0, 0) + size, fill=255)
             
-            # Create border
-            output = ImageOps.fit(img, mask.size, centering=(0.5, 0.5))
-            output.putalpha(mask)
+            # 3. Apply Mask (Make corners transparent)
+            img.putalpha(mask)
             
-            # Add orange border visually (optional, hard to do purely in PIL without overlay)
-            # We will handle border in Tkinter frame
-            return ImageTk.PhotoImage(output)
+            # 4. Draw Orange Border directly on image (Circular Ring)
+            draw_img = ImageDraw.Draw(img)
+            draw_img.ellipse((0, 0, 99, 99), outline=THEME_ACCENT, width=4)
+            
+            return ImageTk.PhotoImage(img)
         except: return None
 
     # --- UI ---
@@ -271,6 +315,13 @@ class KarooFish:
 
         # Settings
         self.create_section(frame, "Settings")
+        
+        # New Auto AFK Settings
+        self.auto_afk_var = tk.BooleanVar(value=True)
+        self.create_toggle(frame, "Auto AFK Mode", self.auto_afk_var)
+        self.auto_afk_seconds_var = tk.IntVar(value=60)
+        self.create_input(frame, "Idle (s):", self.auto_afk_seconds_var)
+        
         self.kp_var = tk.DoubleVar(value=self.kp)
         self.create_input(frame, "Kp:", self.kp_var, True)
         self.kp_var.trace_add('write', lambda *args: setattr(self, 'kp', self.kp_var.get()))
@@ -290,11 +341,8 @@ class KarooFish:
         self.status_msg.pack(pady=20)
 
     def create_afk_widgets(self):
-        # Background is already set in setup_ui
-        
         # Container to center things
         center_frame = tk.Frame(self.page_afk, bg=THEME_BG) 
-        # Trick: use label image as background if possible, but here we just use transparent placement
         
         tk.Label(self.page_afk, text="AFK MODE", font=("Segoe UI", 36, "bold"), bg=THEME_BG, fg=THEME_ACCENT).place(relx=0.5, rely=0.15, anchor="center")
         
@@ -324,17 +372,13 @@ class KarooFish:
         header.pack(fill="x", padx=20, pady=10)
         header.pack_propagate(False)
         
-        # Icon Frame (Orange Border)
-        icon_frame = tk.Frame(header, bg=THEME_ACCENT, width=104, height=104)
-        icon_frame.pack(side="left", padx=20)
-        icon_frame.pack_propagate(False)
-        
+        # User Info LEFT (Photo)
         if self.img_profile:
-            tk.Label(icon_frame, image=self.img_profile, bg=THEME_ACCENT).pack(expand=True)
+            tk.Label(header, image=self.img_profile, bg=THEME_CARD).pack(side="left", padx=20)
         else:
-            tk.Label(icon_frame, text="IMG", bg=THEME_CARD, fg="white").pack(expand=True, fill="both")
+            tk.Label(header, text="IMG", bg=THEME_CARD, fg="white", width=10, height=5).pack(side="left", padx=20)
             
-        # User Info
+        # User Info RIGHT (Text)
         info_frame = tk.Frame(header, bg=THEME_CARD)
         info_frame.pack(side="left", fill="y", pady=20)
         tk.Label(info_frame, text="Fisher", font=("Segoe UI", 24, "bold"), bg=THEME_CARD, fg="white").pack(anchor="w")
@@ -355,7 +399,7 @@ class KarooFish:
         tk.Label(self.page_profile, text="Recent Sessions", font=FONT_BOLD, bg=THEME_BG, fg="white").pack(anchor="w", padx=20, pady=(20, 5))
         
         hist_frame = tk.Frame(self.page_profile, bg=THEME_CARD)
-        hist_frame.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        hist_frame.pack(fill="both", expand=True, padx=20, pady=0)
         
         self.hist_list = tk.Listbox(hist_frame, bg=THEME_CARD, fg="white", font=("Consolas", 10), 
                                     borderwidth=0, highlightthickness=0, selectbackground=THEME_ACCENT)
@@ -364,6 +408,12 @@ class KarooFish:
         self.hist_list.pack(side="left", fill="both", expand=True, padx=10, pady=10)
         sb.pack(side="right", fill="y")
         self.hist_list.config(yscrollcommand=sb.set)
+
+        # Delete Button
+        btn_frame = tk.Frame(self.page_profile, bg=THEME_BG)
+        btn_frame.pack(fill="x", padx=20, pady=(5, 20))
+        tk.Button(btn_frame, text="Delete Selected", bg=THEME_CARD, fg="white", font=("Segoe UI", 9), relief="flat",
+                  command=self.delete_selected_session).pack(side="right")
         
         self.refresh_profile_ui()
 
@@ -448,6 +498,8 @@ class KarooFish:
             self.page_afk.place_forget()
             self.page_profile.place_forget()
             self.page_main.place(relwidth=1, relheight=1)
+            # Reset timer on exit so it doesn't immediately re-trigger
+            self.last_user_activity = time.time()
 
     def toggle_loop(self):
         self.main_loop_active = not self.main_loop_active
@@ -466,6 +518,7 @@ class KarooFish:
             self.purchase_counter = 0
             self.session_loops = 0 # Reset session count on start
             self.afk_session_label.config(text="0")
+            self.last_user_activity = time.time() # Reset AFK timer on start
             
             self.loop_status.config(text="Main Loop: ON", fg="#00ff00")
             
