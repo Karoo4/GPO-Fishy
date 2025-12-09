@@ -32,7 +32,7 @@ if not is_admin():
 THEME_BG = "#0b0b0b"
 THEME_ACCENT = "#ff8d00" # Orange
 THEME_CARD = "#1a1a1a"   # Dark Grey
-THEME_NOTIF_BG = "#222222" # Slightly lighter for popup
+THEME_NOTIF_BG = "#222222"
 FONT_MAIN = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 11, "bold")
 FONT_TITLE = ("Segoe UI", 20, "bold")
@@ -45,7 +45,8 @@ TITLE_LOGO_URL = "https://image2url.com/images/1765149562249-ff56b103-b5ea-4402-
 PROFILE_ICON_URL = "https://i.pinimg.com/736x/f1/bb/3d/f1bb3d7b7b2fe3dbf46915f380043be9.jpg"
 
 # NOTIFICATION ASSETS
-NOTIF_AUDIO_URL = "https://www.dropbox.com/scl/fi/u9563mn42ay8rkgm33aod/igoronly.mp3?rlkey=vsqye9u2227x4c36og1myc8eb&st=3pdh75ks&dl=0"
+# Note: dl=1 ensures direct download instead of dropbox preview page
+NOTIF_AUDIO_URL = "https://www.dropbox.com/scl/fi/u9563mn42ay8rkgm33aod/igoronly.mp3?rlkey=vsqye9u2227x4c36og1myc8eb&st=3pdh75ks&dl=1"
 NOTIF_ICON_URL = "https://media.discordapp.net/attachments/776428933603786772/1447747919246528543/IMG_8252.png?ex=6938bfd1&is=69376e51&hm=ab1926f5459273c16aa1c6498ea96d74ae15b08755ed930a1b5bf615ffc0c31b&=&format=webp&quality=lossless&width=1214&height=1192"
 
 STATS_FILE = "karoo_stats.json"
@@ -113,7 +114,6 @@ class KarooFish:
 
         self.stats = self.load_stats()
 
-        # Load main assets
         self.bg_main = self.load_processed_image(VIVI_URL, 0.3)
         self.bg_afk = self.load_processed_image(DUCK_URL, 0.4)
         self.img_title = self.load_title_image(TITLE_LOGO_URL)
@@ -124,7 +124,6 @@ class KarooFish:
         self.load_config()
         self.register_hotkeys()
         
-        # Start background downloader for Notification Assets
         threading.Thread(target=self.cache_notification_assets, daemon=True).start()
         
         self.root.bind_all("<Any-KeyPress>", self.reset_afk_timer)
@@ -138,7 +137,10 @@ class KarooFish:
         try:
             temp_dir = tempfile.gettempdir()
             audio_path = os.path.join(temp_dir, "karoo_igor.mp3")
-            if not os.path.exists(audio_path):
+            
+            # Re-download if size is 0 or doesn't exist
+            if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
+                print("Downloading notification audio...")
                 r = requests.get(NOTIF_AUDIO_URL)
                 with open(audio_path, 'wb') as f:
                     f.write(r.content)
@@ -150,7 +152,6 @@ class KarooFish:
         try:
             response = requests.get(NOTIF_ICON_URL)
             img = Image.open(BytesIO(response.content)).convert("RGBA")
-            # Resize for notification (e.g. 64x64)
             img = img.resize((64, 64), Image.Resampling.LANCZOS)
             self.cached_notif_icon = ImageTk.PhotoImage(img)
         except Exception as e:
@@ -158,16 +159,12 @@ class KarooFish:
 
     # --- AUDIO PLAYER (MCI) ---
     def play_mp3(self, path):
-        # Use Windows MCI to play MP3 without heavy libraries
         def _play():
             try:
                 alias = "karoo_notif"
-                # Close any previous instance
                 ctypes.windll.winmm.mciSendStringW(f"close {alias}", None, 0, None)
-                # Open
                 cmd = f'open "{path}" type mpegvideo alias {alias}'
                 ctypes.windll.winmm.mciSendStringW(cmd, None, 0, None)
-                # Play
                 ctypes.windll.winmm.mciSendStringW(f"play {alias}", None, 0, None)
             except: pass
         threading.Thread(target=_play, daemon=True).start()
@@ -348,12 +345,19 @@ class KarooFish:
         self.save_stats()
         
         if self.notify_enabled_var.get():
-            # Play Audio
-            if self.cached_audio_path:
-                self.play_mp3(self.cached_audio_path)
-            
-            # Show Visual
-            self.root.after(0, self.show_osu_style_notification)
+            self.perform_notification_action()
+
+    def perform_notification_action(self):
+        # Play Audio
+        if self.cached_audio_path:
+            self.play_mp3(self.cached_audio_path)
+        
+        # Show Visual
+        self.root.after(0, self.show_osu_style_notification)
+
+    def test_notification(self):
+        print("Testing Notification...")
+        self.perform_notification_action()
 
     def show_osu_style_notification(self):
         try:
@@ -510,7 +514,22 @@ class KarooFish:
         # --- NOTIFICATION TOGGLE ---
         self.create_section(frame, "Notifications")
         self.notify_enabled_var = tk.BooleanVar(value=True)
-        self.create_toggle(frame, "Enable Rare Catch Alerts", self.notify_enabled_var)
+        
+        n_frame = tk.Frame(frame, bg=THEME_BG)
+        n_frame.pack(fill="x", padx=20, pady=2)
+        tk.Checkbutton(n_frame, text="Enable Rare Catch Alerts", variable=self.notify_enabled_var, 
+                       bg=THEME_BG, fg="white", selectcolor="#202020", activebackground=THEME_BG, 
+                       activeforeground=THEME_ACCENT, font=FONT_BOLD).pack(side="left")
+        
+        tk.Button(n_frame, text="Test Alert", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 8, "bold"), 
+                  command=self.test_notification).pack(side="right", padx=5)
+        
+        s_frame = tk.Frame(frame, bg=THEME_BG)
+        s_frame.pack(fill="x", padx=20, pady=2)
+        tk.Label(s_frame, text="Sound File (.wav):", bg=THEME_BG, fg="gray").pack(side="left")
+        self.notify_sound_var = tk.StringVar(value="")
+        tk.Button(s_frame, text="Browse...", bg="#202020", fg="white", font=("Segoe UI", 8), command=self.select_sound_file).pack(side="right")
+        tk.Label(s_frame, textvariable=self.notify_sound_var, bg=THEME_BG, fg=THEME_ACCENT, width=15).pack(side="right", padx=5)
         
         # --- SAVE CONTROLS ---
         self.create_section(frame, "Configuration")
@@ -521,6 +540,11 @@ class KarooFish:
 
         self.status_msg = tk.Label(frame, text="", bg=THEME_BG, fg=THEME_ACCENT)
         self.status_msg.pack(pady=20)
+
+    def select_sound_file(self):
+        file_path = filedialog.askopenfilename(filetypes=[("WAV files", "*.wav")])
+        if file_path:
+            self.notify_sound_var.set(file_path)
 
     def create_reroll_tab(self, parent):
         frame = tk.Frame(parent, bg=THEME_BG)
@@ -667,6 +691,7 @@ class KarooFish:
         self.last_user_activity = time.time()
 
     def check_auto_afk(self):
+        # Check AFK only if Fishing Bot is active
         if self.auto_afk_var.get() and self.fishing_active and not self.afk_mode_active:
             idle_time = time.time() - self.last_user_activity
             if idle_time > self.auto_afk_seconds_var.get():
@@ -677,6 +702,7 @@ class KarooFish:
         try:
             keyboard.unhook_all()
             for k, f in [('toggle_loop', self.toggle_loop), ('toggle_overlay', self.toggle_overlay), ('toggle_afk', self.toggle_afk), ('exit', self.exit_app)]:
+                # Use saved key if available
                 key_name = self.hotkeys.get(k, '')
                 if key_name:
                     keyboard.add_hotkey(key_name, lambda f=f: self.root.after(0, f))
@@ -697,16 +723,20 @@ class KarooFish:
             self.last_user_activity = time.time()
 
     def toggle_loop(self):
+        # Determine current tab
         current_tab = self.notebook.index(self.notebook.select())
-        if current_tab == 0: self.toggle_fishing()
-        elif current_tab == 1: self.toggle_reroll()
+        
+        if current_tab == 0: # Fishing Tab
+            self.toggle_fishing()
+        elif current_tab == 1: # Reroll Tab
+            self.toggle_reroll()
 
     def toggle_fishing(self):
-        if self.reroll_active: return
+        if self.reroll_active: return # Cannot run both
         self.fishing_active = not self.fishing_active
         if self.fishing_active:
             req = []
-            if self.auto_purchase_var.get(): req.extend([1,2,3,4])
+            if self.auto_purchase_var.get(): req.extend([1,2,3,4]) # Added Pt3 as required for Auto Buy
             if self.item_check_var.get(): req.extend([5,7])
             if self.auto_bait_var.get(): req.append(6)
             
@@ -780,6 +810,7 @@ class KarooFish:
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
+            print(f"Clicking: {debug_name} at {x},{y}")
             win32api.SetCursorPos((x, y))
             time.sleep(0.02)
             win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0)
@@ -795,6 +826,8 @@ class KarooFish:
         try:
             self.is_performing_action = True 
             if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]): return
+            
+            # 1. Standard Purchase Flow
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
             self.click(self.point_coords[1], "Pt 1 (Yes)")
@@ -810,12 +843,15 @@ class KarooFish:
             self.move_to(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
 
-            # Check Pt 3 for "Red"
+            # 2. Check Pt 3 for "Red" (Menu Stuck Open)
             if self.point_coords[3]:
+                # Capture a single frame to check color
+                # If camera is running (it should be), grab latest. If not, fallback.
                 frame = None
                 if self.camera and self.camera.is_capturing:
                     frame = self.camera.get_latest_frame()
                 else:
+                    # Temporary fallback grabber
                     tmp_cam = dxcam.create(output_color="BGR")
                     frame = tmp_cam.grab()
                     del tmp_cam
@@ -824,15 +860,21 @@ class KarooFish:
                     p3 = self.point_coords[3]
                     cx, cy = int(p3[0]), int(p3[1])
                     if cy < frame.shape[0] and cx < frame.shape[1]:
+                        # BGR Check
                         b, g, r = frame[cy, cx]
+                        # Red is (0, 0, 255). Tolerance included.
                         if r > 200 and g < 50 and b < 50:
+                            print("Red detected at Pt 3 (Menu stuck). Forcing close.")
                             self.click(p3, "Pt 3 (Force Close)")
                             time.sleep(0.5)
                             self.click(self.point_coords[2], "Pt 2 (Post-Close Safety)")
                             time.sleep(0.5)
                             self.move_to(self.point_coords[4])
-        except Exception: pass
-        finally: self.is_performing_action = False
+
+        except Exception as e:
+            print(f"Auto Purchase Error: {e}")
+        finally: 
+            self.is_performing_action = False
 
     def perform_store_fruit(self):
         p5, p7 = self.point_coords.get(5), self.point_coords.get(7)
@@ -902,6 +944,7 @@ class KarooFish:
         dark_color = (0x19, 0x19, 0x19)
         white_color = (0xff, 0xff, 0xff)
 
+        # Lazy Load Camera (Safe for Keybinds)
         if self.camera is None: 
             try: self.camera = dxcam.create(output_color="BGR")
             except: pass
@@ -928,14 +971,19 @@ class KarooFish:
                     time.sleep(0.01)
                     continue
                 
-                # Black Screen Handling
+                # --- TRANSIENT BLACK SCREEN FIX ---
+                # Use max(img) instead of sum() for speed. If max is 0, the whole image is black.
                 if np.max(img_full) == 0:
                     black_screen_strikes += 1
+                    
+                    # If we have less than 20 consecutive bad frames, just skip this iteration.
+                    # This allows momentary glitches to pass without killing the camera.
                     if black_screen_strikes < 20:
                         time.sleep(0.01)
                         continue
                     else:
-                        print("Black Screen. Resetting Camera...")
+                        # Real persistent black screen detected (>0.3s). Reset Camera.
+                        print("Persistent Black Screen detected. Resetting Camera...")
                         try: self.camera.stop()
                         except: pass
                         del self.camera
@@ -946,14 +994,23 @@ class KarooFish:
                         black_screen_strikes = 0
                         continue
                 
+                # If we get a good frame, reset the strike counter
                 black_screen_strikes = 0
+                # ----------------------------------
                 
-                # --- NOTIFICATION SCANNER ---
-                # Scan top 15%, middle 40%
+                # --- NOTIFICATION DETECTION START ---
+                # Scan Top Center area of screen for Orange text
+                # We assume the game is 1080p-ish or similar.
+                # Top 15% height, Middle 40% width.
                 full_h, full_w, _ = img_full.shape
+                # Crop region: y=0 to 15%, x=30% to 70%
                 notif_crop = img_full[0:int(full_h * 0.15), int(full_w * 0.3):int(full_w * 0.7)]
                 
-                # Check for Orange Text (#e68948 -> BGR: 72, 137, 230)
+                # DXCam is BGR. Orange #e68948 is R=230, G=137, B=72
+                # Target BGR: (72, 137, 230)
+                # Bounds: B(40-100), G(100-170), R(200-255)
+                # Using numpy masks for speed
+                
                 b_channel = notif_crop[:, :, 0]
                 g_channel = notif_crop[:, :, 1]
                 r_channel = notif_crop[:, :, 2]
@@ -962,9 +1019,10 @@ class KarooFish:
                        (g_channel > 100) & (g_channel < 170) & \
                        (r_channel > 200)
                 
+                # If we find more than 50 pixels of this color in that region, assume text is present
                 if np.count_nonzero(mask) > 50:
                     self.trigger_rare_catch_notification()
-                # ----------------------------
+                # --- NOTIFICATION DETECTION END ---
 
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 width, height = self.overlay_area['width'], self.overlay_area['height']
@@ -1143,6 +1201,7 @@ class KarooFish:
     def run_reroll_loop(self):
         print("Reroll Loop Started")
         
+        # Lazy Load Camera
         if self.camera is None: 
             try: self.camera = dxcam.create(output_color="BGR")
             except: pass
@@ -1161,7 +1220,7 @@ class KarooFish:
                     time.sleep(0.01)
                     continue
                 
-                # Black Screen Fix
+                # --- TRANSIENT BLACK SCREEN FIX (Reroll Version) ---
                 if np.max(img) == 0:
                     black_screen_strikes += 1
                     if black_screen_strikes < 20:
@@ -1179,9 +1238,11 @@ class KarooFish:
                         continue
                 
                 black_screen_strikes = 0
+                # ---------------------------------------------------
                 
                 if cy < img.shape[0] and cx < img.shape[1]:
                     b, g, r = img[cy, cx]
+                    # Check for Gold #b37a00 (R:179, G:122, B:0) +/- 35
                     if (abs(r - 179) < 35) and (abs(g - 122) < 35) and (abs(b - 0) < 35):
                         print("Reroll Button Detected. Clicking.")
                         self.click(p8, "Reroll")
