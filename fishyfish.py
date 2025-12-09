@@ -45,7 +45,7 @@ TITLE_LOGO_URL = "https://image2url.com/images/1765149562249-ff56b103-b5ea-4402-
 PROFILE_ICON_URL = "https://i.pinimg.com/736x/f1/bb/3d/f1bb3d7b7b2fe3dbf46915f380043be9.jpg"
 
 # NOTIFICATION ASSETS
-NOTIF_AUDIO_URL = "https://drab-chocolate-iifrpsndgm-9e6mdw1szk.edgeone.dev/igor.mp3"
+NOTIF_AUDIO_URL = "https://www.dropbox.com/scl/fi/u9563mn42ay8rkgm33aod/igoronly.mp3?rlkey=vsqye9u2227x4c36og1myc8eb&st=3pdh75ks&dl=0"
 NOTIF_ICON_URL = "https://media.discordapp.net/attachments/776428933603786772/1447747919246528543/IMG_8252.png?ex=6938bfd1&is=69376e51&hm=ab1926f5459273c16aa1c6498ea96d74ae15b08755ed930a1b5bf615ffc0c31b&=&format=webp&quality=lossless&width=1214&height=1192"
 
 STATS_FILE = "karoo_stats.json"
