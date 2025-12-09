@@ -54,7 +54,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish")
+        self.root.title("Karoo Fish - RDP Lag Mode")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -133,10 +133,7 @@ class KarooFish:
         self.root.bind_all("<Motion>", self.reset_afk_timer)
         self.check_auto_afk()
 
-    # ... [Keep cache_notification_assets, play_notification_sound, load_config, save_config, reset_defaults, etc. unchanged] ...
-    # For brevity, assume standard helper methods (load_processed_image, etc.) are here exactly as in your original code.
-    
-    # --- INSERTED HELPER METHODS TO KEEP CODE COMPLETE ---
+    # --- ASSETS & HELPERS ---
     def cache_notification_assets(self):
         try:
             temp_dir = tempfile.gettempdir()
@@ -648,38 +645,46 @@ class KarooFish:
             return False
         pynput_keyboard.Listener(on_press=on_press).start()
 
-    # --- 2. RDP COMPATIBLE MOUSE ACTIONS ---
-    # In RDP, SetCursorPos (visual) and mouse_event (internal) often desync.
-    # We use MOUSEEVENTF_ABSOLUTE to force the driver to a specific normalized coordinate.
+    # --- HIGH LATENCY / RDP OPTIMIZED MOUSE ACTIONS ---
+    # These functions are intentionally slow and redundant to handle laggy connections.
     
     def move_to(self, pt):
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
-            # Normalize to 65535
-            nx = int(x * 65535 / self.screen_width)
-            ny = int(y * 65535 / self.screen_height)
-            win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
-            time.sleep(0.05)
-        except Exception: pass
-
-    def click(self, pt, debug_name="Target", hold_time=0.1):
-        if not pt: return
-        try:
-            x, y = int(pt[0]), int(pt[1])
-            print(f"Clicking: {debug_name} at {x},{y}")
-            # Calculate absolute normalized coordinates
+            # Normalize to 65535 (Absolute coordinates required for RDP)
             nx = int(x * 65535 / self.screen_width)
             ny = int(y * 65535 / self.screen_height)
             
-            # Move Absolute
+            # 1. Move
             win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
-            time.sleep(0.05)
-            # Click
+            time.sleep(0.1) # Wait for visual update
+            
+            # 2. Move AGAIN (Redundancy check for packet loss)
+            win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
+            time.sleep(0.1)
+        except Exception: pass
+
+    def click(self, pt, debug_name="Target", hold_time=0.2):
+        if not pt: return
+        try:
+            # 1. Move to target first explicitly
+            self.move_to(pt)
+            
+            # 2. Press Down
+            print(f"Clicking: {debug_name}")
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(hold_time) 
+            
+            # 3. Hold (If laggy, we need a longer minimum hold)
+            # Force minimum 0.25s for RDP robustness
+            actual_hold = max(hold_time, 0.25)
+            time.sleep(actual_hold) 
+            
+            # 4. Release
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            time.sleep(0.05)
+            
+            # 5. Post-click cooldown
+            time.sleep(0.2)
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
     # --- ACTIONS (FISHING) ---
@@ -687,20 +692,39 @@ class KarooFish:
         try:
             self.is_performing_action = True 
             if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]): return
-            keyboard.press_and_release('e')
-            time.sleep(self.purchase_delay_after_key)
+            
+            print("Auto Purchase: Start")
+            
+            # Press 'E' with explicit hold
+            keyboard.press('e')
+            time.sleep(0.2)
+            keyboard.release('e')
+            time.sleep(self.purchase_delay_after_key) 
+            
             self.click(self.point_coords[1], "Pt 1 (Yes)")
-            time.sleep(self.purchase_click_delay)
+            time.sleep(1.0) 
+            
             self.click(self.point_coords[2], "Pt 2 (Input)")
-            time.sleep(self.purchase_click_delay)
-            keyboard.write(str(self.amount_var.get()))
-            time.sleep(self.purchase_after_type_delay)
+            time.sleep(1.0)
+            
+            # TYPE SLOWLY MANUALLY (Keyboard.write can be too fast for laggy RDP)
+            amount_str = str(self.amount_var.get())
+            for char in amount_str:
+                keyboard.write(char)
+                time.sleep(0.2) # Type one number every 0.2s
+            
+            time.sleep(1.0)
+            
             self.click(self.point_coords[1], "Pt 1 (Confirm)")
-            time.sleep(self.purchase_click_delay)
+            time.sleep(1.0)
+            
             self.click(self.point_coords[2], "Pt 2 (Safety)")
-            time.sleep(self.purchase_click_delay)
+            time.sleep(1.0)
+            
             self.move_to(self.point_coords[4])
-            time.sleep(self.purchase_click_delay)
+            time.sleep(1.0)
+
+            # Robust Camera Check for Red/Stuck Menu
             if self.point_coords[3]:
                 frame = None
                 if self.camera and self.camera.is_capturing:
@@ -717,6 +741,7 @@ class KarooFish:
                     if cy < frame.shape[0] and cx < frame.shape[1]:
                         b, g, r = frame[cy, cx]
                         if r > 200 and g < 50 and b < 50:
+                            print("Menu Stuck (Red). Forcing Close.")
                             self.click(p3, "Pt 3 (Force Close)")
                             time.sleep(0.5)
                             self.click(self.point_coords[2], "Pt 2 (Post-Close Safety)")
@@ -771,25 +796,37 @@ class KarooFish:
 
     def cast(self):
         if self.is_performing_action: return 
-        # RDP Fix: Cast needs longer hold time occasionally
-        self.click(self.point_coords[4], "Cast (Long)", hold_time=1.2)
+        
+        print("Casting...")
+        # 1. Force mouse move to water explicitly before clicking
+        self.move_to(self.point_coords[4])
+        time.sleep(0.5) # Wait for the camera to actually settle on the water
+        
+        # 2. Long Click for Cast (Lag Safe)
+        # Increased to 1.8 seconds. This ensures the bar fills up even if 0.5s of packets are lost.
+        self.click(self.point_coords[4], "Cast (Lag Safe)", hold_time=1.8)
+        
         self.is_clicking = False
         self.session_loops += 1
         self.last_cast_time = time.time()
+        
         if self.afk_mode_active:
              self.root.after(0, lambda: self.afk_session_label.config(text=str(self.session_loops)))
              current_total = self.stats['total_caught'] + self.session_loops
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
+        
         self.previous_error = 0
-        time.sleep(0.5)
+        
+        # 3. Wait for the bobber to land (Lag Safe)
+        time.sleep(2.0)
 
     def run_fishing_loop(self):
-        print("Fishing Loop Started")
+        print("Fishing Loop Started (RDP Optimized)")
         target_color = (0x55, 0xaa, 0xff) 
         dark_color = (0x19, 0x19, 0x19)
         white_color = (0xff, 0xff, 0xff)
         
-        # RDP Fix: Ensure dxcam doesn't crash on bad output
+        # DXCam Safety Init
         if self.camera is None: 
             try: self.camera = dxcam.create(output_color="BGR")
             except: 
@@ -843,7 +880,6 @@ class KarooFish:
                 
                 black_screen_strikes = 0
                 
-                # ... [Existing Detection Logic - No Changes Needed Here] ...
                 # Notification detection
                 full_h, full_w, _ = img_full.shape
                 notif_crop = img_full[0:int(full_h * 0.15), int(full_w * 0.3):int(full_w * 0.7)]
@@ -979,7 +1015,9 @@ class KarooFish:
                         if self.is_clicking:
                             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                             self.is_clicking = False
-                time.sleep(0.01)
+                
+                # RDP OPTIMIZATION: Scan slower to reduce CPU and match RDP stream speed
+                time.sleep(0.05)
 
         except Exception as e: print(f"Error in fishing loop: {e}")
         finally:
