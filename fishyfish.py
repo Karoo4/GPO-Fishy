@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox
 import threading
 import keyboard
 from pynput import keyboard as pynput_keyboard
@@ -44,8 +44,8 @@ DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.
 TITLE_LOGO_URL = "https://image2url.com/images/1765149562249-ff56b103-b5ea-4402-a896-0ed38202b804.png"
 PROFILE_ICON_URL = "https://i.pinimg.com/736x/f1/bb/3d/f1bb3d7b7b2fe3dbf46915f380043be9.jpg"
 
-# NOTIFICATION ASSETS
-# Note: dl=1 ensures direct download instead of dropbox preview page
+# NOTIFICATION ASSETS (Hardcoded & Auto-Downloaded)
+# Note: dl=1 is crucial for direct download
 NOTIF_AUDIO_URL = "https://www.dropbox.com/scl/fi/u9563mn42ay8rkgm33aod/igoronly.mp3?rlkey=vsqye9u2227x4c36og1myc8eb&st=3pdh75ks&dl=1"
 NOTIF_ICON_URL = "https://media.discordapp.net/attachments/776428933603786772/1447747919246528543/IMG_8252.png?ex=6938bfd1&is=69376e51&hm=ab1926f5459273c16aa1c6498ea96d74ae15b08755ed930a1b5bf615ffc0c31b&=&format=webp&quality=lossless&width=1214&height=1192"
 
@@ -120,10 +120,10 @@ class KarooFish:
         self.img_profile = self.load_circular_icon(PROFILE_ICON_URL)
 
         self.setup_ui()
-        
         self.load_config()
         self.register_hotkeys()
         
+        # Start background downloader for Assets
         threading.Thread(target=self.cache_notification_assets, daemon=True).start()
         
         self.root.bind_all("<Any-KeyPress>", self.reset_afk_timer)
@@ -133,23 +133,25 @@ class KarooFish:
 
     # --- ASSET CACHING ---
     def cache_notification_assets(self):
-        # 1. Cache Audio
+        # 1. Cache MP3 Audio
         try:
             temp_dir = tempfile.gettempdir()
-            audio_path = os.path.join(temp_dir, "karoo_igor.mp3")
+            audio_path = os.path.join(temp_dir, "karoo_igor_v2.mp3")
             
-            # Re-download if size is 0 or doesn't exist
-            if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
-                print("Downloading notification audio...")
+            # Check if exists and has size
+            if not os.path.exists(audio_path) or os.path.getsize(audio_path) < 1000:
+                print("Downloading audio asset...")
                 r = requests.get(NOTIF_AUDIO_URL)
                 with open(audio_path, 'wb') as f:
                     f.write(r.content)
             self.cached_audio_path = audio_path
+            print(f"Audio ready: {self.cached_audio_path}")
         except Exception as e:
             print(f"Failed to cache audio: {e}")
 
         # 2. Cache Icon
         try:
+            print("Downloading icon asset...")
             response = requests.get(NOTIF_ICON_URL)
             img = Image.open(BytesIO(response.content)).convert("RGBA")
             img = img.resize((64, 64), Image.Resampling.LANCZOS)
@@ -157,16 +159,24 @@ class KarooFish:
         except Exception as e:
             print(f"Failed to cache icon: {e}")
 
-    # --- AUDIO PLAYER (MCI) ---
-    def play_mp3(self, path):
+    # --- NATIVE WINDOWS AUDIO PLAYER (Supports MP3) ---
+    def play_notification_sound(self):
+        if not self.cached_audio_path: return
+        
         def _play():
             try:
-                alias = "karoo_notif"
+                # Use Windows MCI (Media Control Interface) to play MP3 natively
+                alias = "karoo_alert"
+                # Stop any previous
                 ctypes.windll.winmm.mciSendStringW(f"close {alias}", None, 0, None)
-                cmd = f'open "{path}" type mpegvideo alias {alias}'
-                ctypes.windll.winmm.mciSendStringW(cmd, None, 0, None)
+                # Open command (Must use quotes for paths with spaces)
+                cmd_open = f'open "{self.cached_audio_path}" type mpegvideo alias {alias}'
+                ctypes.windll.winmm.mciSendStringW(cmd_open, None, 0, None)
+                # Play command
                 ctypes.windll.winmm.mciSendStringW(f"play {alias}", None, 0, None)
-            except: pass
+            except Exception as e:
+                print(f"Audio Error: {e}")
+        
         threading.Thread(target=_play, daemon=True).start()
 
     # --- DATA & CONFIG ---
@@ -349,8 +359,7 @@ class KarooFish:
 
     def perform_notification_action(self):
         # Play Audio
-        if self.cached_audio_path:
-            self.play_mp3(self.cached_audio_path)
+        self.play_notification_sound()
         
         # Show Visual
         self.root.after(0, self.show_osu_style_notification)
@@ -524,13 +533,6 @@ class KarooFish:
         tk.Button(n_frame, text="Test Alert", bg=THEME_ACCENT, fg="black", font=("Segoe UI", 8, "bold"), 
                   command=self.test_notification).pack(side="right", padx=5)
         
-        s_frame = tk.Frame(frame, bg=THEME_BG)
-        s_frame.pack(fill="x", padx=20, pady=2)
-        tk.Label(s_frame, text="Sound File (.wav):", bg=THEME_BG, fg="gray").pack(side="left")
-        self.notify_sound_var = tk.StringVar(value="")
-        tk.Button(s_frame, text="Browse...", bg="#202020", fg="white", font=("Segoe UI", 8), command=self.select_sound_file).pack(side="right")
-        tk.Label(s_frame, textvariable=self.notify_sound_var, bg=THEME_BG, fg=THEME_ACCENT, width=15).pack(side="right", padx=5)
-        
         # --- SAVE CONTROLS ---
         self.create_section(frame, "Configuration")
         btn_frame = tk.Frame(frame, bg=THEME_BG)
@@ -540,11 +542,6 @@ class KarooFish:
 
         self.status_msg = tk.Label(frame, text="", bg=THEME_BG, fg=THEME_ACCENT)
         self.status_msg.pack(pady=20)
-
-    def select_sound_file(self):
-        file_path = filedialog.askopenfilename(filetypes=[("WAV files", "*.wav")])
-        if file_path:
-            self.notify_sound_var.set(file_path)
 
     def create_reroll_tab(self, parent):
         frame = tk.Frame(parent, bg=THEME_BG)
