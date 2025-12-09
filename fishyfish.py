@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import threading
 import keyboard
 from pynput import keyboard as pynput_keyboard
@@ -15,8 +15,9 @@ from io import BytesIO
 import time
 import json
 import os
+import tempfile
 from datetime import datetime
-import numpy as np 
+import numpy as np
 
 # --- 1. FORCE ADMIN ---
 def is_admin():
@@ -31,16 +32,21 @@ if not is_admin():
 THEME_BG = "#0b0b0b"
 THEME_ACCENT = "#ff8d00" # Orange
 THEME_CARD = "#1a1a1a"   # Dark Grey
+THEME_NOTIF_BG = "#222222" # Slightly lighter for popup
 FONT_MAIN = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 11, "bold")
 FONT_TITLE = ("Segoe UI", 20, "bold")
 FONT_AFK = ("Segoe UI", 48, "bold")
 
-# IMAGE URLS
+# RESOURCES
 VIVI_URL = "https://static0.srcdn.com/wordpress/wp-content/uploads/2023/10/vivi.jpg?q=49&fit=crop&w=825&dpr=2"
 DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2FX8YUuU7OpOA%2Fmaxresdefault.jpg&f=1&nofb=1&ipt=6d669298669fff2e4f438b54453c1f59c1655ca19fa2407ea1c42e471a4d7ab6"
 TITLE_LOGO_URL = "https://image2url.com/images/1765149562249-ff56b103-b5ea-4402-a896-0ed38202b804.png"
 PROFILE_ICON_URL = "https://i.pinimg.com/736x/f1/bb/3d/f1bb3d7b7b2fe3dbf46915f380043be9.jpg"
+
+# NOTIFICATION ASSETS
+NOTIF_AUDIO_URL = "https://drab-chocolate-iifrpsndgm-9e6mdw1szk.edgeone.dev/igor.mp3"
+NOTIF_ICON_URL = "https://media.discordapp.net/attachments/776428933603786772/1447747919246528543/IMG_8252.png?ex=6938bfd1&is=69376e51&hm=ab1926f5459273c16aa1c6498ea96d74ae15b08755ed930a1b5bf615ffc0c31b&=&format=webp&quality=lossless&width=1214&height=1192"
 
 STATS_FILE = "karoo_stats.json"
 CONFIG_FILE = "karoo_config.json"
@@ -67,6 +73,10 @@ class KarooFish:
         self.is_performing_action = False 
         self.last_cast_time = 0.0
         self.last_user_activity = time.time()
+        
+        self.last_notification_time = 0
+        self.cached_audio_path = None
+        self.cached_notif_icon = None
         
         # --- CONFIG VARS ---
         self.resize_threshold = 10
@@ -97,14 +107,13 @@ class KarooFish:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         
-        # Lazy Loading Camera (Fixes Keybind Issue)
         self.camera = None
-        
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         self.point_labels = {} 
 
         self.stats = self.load_stats()
 
+        # Load main assets
         self.bg_main = self.load_processed_image(VIVI_URL, 0.3)
         self.bg_afk = self.load_processed_image(DUCK_URL, 0.4)
         self.img_title = self.load_title_image(TITLE_LOGO_URL)
@@ -115,11 +124,53 @@ class KarooFish:
         self.load_config()
         self.register_hotkeys()
         
-        # Auto AFK Monitor
+        # Start background downloader for Notification Assets
+        threading.Thread(target=self.cache_notification_assets, daemon=True).start()
+        
         self.root.bind_all("<Any-KeyPress>", self.reset_afk_timer)
         self.root.bind_all("<Any-ButtonPress>", self.reset_afk_timer)
         self.root.bind_all("<Motion>", self.reset_afk_timer)
         self.check_auto_afk()
+
+    # --- ASSET CACHING ---
+    def cache_notification_assets(self):
+        # 1. Cache Audio
+        try:
+            temp_dir = tempfile.gettempdir()
+            audio_path = os.path.join(temp_dir, "karoo_igor.mp3")
+            if not os.path.exists(audio_path):
+                r = requests.get(NOTIF_AUDIO_URL)
+                with open(audio_path, 'wb') as f:
+                    f.write(r.content)
+            self.cached_audio_path = audio_path
+        except Exception as e:
+            print(f"Failed to cache audio: {e}")
+
+        # 2. Cache Icon
+        try:
+            response = requests.get(NOTIF_ICON_URL)
+            img = Image.open(BytesIO(response.content)).convert("RGBA")
+            # Resize for notification (e.g. 64x64)
+            img = img.resize((64, 64), Image.Resampling.LANCZOS)
+            self.cached_notif_icon = ImageTk.PhotoImage(img)
+        except Exception as e:
+            print(f"Failed to cache icon: {e}")
+
+    # --- AUDIO PLAYER (MCI) ---
+    def play_mp3(self, path):
+        # Use Windows MCI to play MP3 without heavy libraries
+        def _play():
+            try:
+                alias = "karoo_notif"
+                # Close any previous instance
+                ctypes.windll.winmm.mciSendStringW(f"close {alias}", None, 0, None)
+                # Open
+                cmd = f'open "{path}" type mpegvideo alias {alias}'
+                ctypes.windll.winmm.mciSendStringW(cmd, None, 0, None)
+                # Play
+                ctypes.windll.winmm.mciSendStringW(f"play {alias}", None, 0, None)
+            except: pass
+        threading.Thread(target=_play, daemon=True).start()
 
     # --- DATA & CONFIG ---
     def load_config(self):
@@ -152,6 +203,7 @@ class KarooFish:
             if "kp" in data: self.kp_var.set(data["kp"])
             if "kd" in data: self.kd_var.set(data["kd"])
             if "timeout" in data: self.timeout_var.set(data["timeout"])
+            if "notify_enabled" in data: self.notify_enabled_var.set(data["notify_enabled"])
             
             print("Config loaded successfully.")
         except Exception as e:
@@ -170,7 +222,8 @@ class KarooFish:
             "afk_seconds": self.auto_afk_seconds_var.get(),
             "kp": self.kp_var.get(),
             "kd": self.kd_var.get(),
-            "timeout": self.timeout_var.get()
+            "timeout": self.timeout_var.get(),
+            "notify_enabled": self.notify_enabled_var.get()
         }
         try:
             with open(CONFIG_FILE, 'w') as f:
@@ -201,6 +254,7 @@ class KarooFish:
         self.kp_var.set(0.1)
         self.kd_var.set(0.5)
         self.timeout_var.set(15.0)
+        self.notify_enabled_var.set(True)
         
         self.save_config()
         self.status_msg.config(text="Defaults Restored", fg=THEME_ACCENT)
@@ -249,9 +303,11 @@ class KarooFish:
         if os.path.exists(STATS_FILE):
             try:
                 with open(STATS_FILE, 'r') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                    if "rare_catches" not in data: data["rare_catches"] = []
+                    return data
             except: pass
-        return {"total_caught": 0, "history": []}
+        return {"total_caught": 0, "history": [], "rare_catches": []}
 
     def save_stats(self):
         with open(STATS_FILE, 'w') as f:
@@ -275,6 +331,72 @@ class KarooFish:
             del self.stats['history'][index]
             self.save_stats()
             self.refresh_profile_ui()
+
+    # --- NOTIFICATION SYSTEM ---
+    def trigger_rare_catch_notification(self):
+        current_time = time.time()
+        # 10s cooldown
+        if current_time - self.last_notification_time < 10:
+            return
+        
+        self.last_notification_time = current_time
+        print("DEVIL FRUIT DETECTED!")
+        
+        # Log
+        catch_time = datetime.now().strftime("%Y-%m-%d %H:%M")
+        self.stats["rare_catches"].insert(0, {"date": catch_time, "item": "Devil Fruit"})
+        self.save_stats()
+        
+        if self.notify_enabled_var.get():
+            # Play Audio
+            if self.cached_audio_path:
+                self.play_mp3(self.cached_audio_path)
+            
+            # Show Visual
+            self.root.after(0, self.show_osu_style_notification)
+
+    def show_osu_style_notification(self):
+        try:
+            notif = tk.Toplevel(self.root)
+            notif.overrideredirect(True)
+            notif.attributes('-topmost', True)
+            notif.configure(bg=THEME_NOTIF_BG)
+            
+            # Dimensions
+            w, h = 320, 80
+            # Position: Bottom Right with margin
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            x = screen_w - w - 20
+            y = screen_h - h - 50
+            notif.geometry(f"{w}x{h}+{x}+{y}")
+            
+            # Layout
+            # Orange Accent Strip
+            strip = tk.Frame(notif, bg=THEME_ACCENT, width=5)
+            strip.pack(side="left", fill="y")
+            
+            # Content Frame
+            content = tk.Frame(notif, bg=THEME_NOTIF_BG)
+            content.pack(side="left", fill="both", expand=True, padx=10)
+            
+            # Icon
+            if self.cached_notif_icon:
+                lbl_icon = tk.Label(content, image=self.cached_notif_icon, bg=THEME_NOTIF_BG)
+                lbl_icon.pack(side="left", padx=(0, 10))
+            
+            # Text Frame
+            txt_frame = tk.Frame(content, bg=THEME_NOTIF_BG)
+            txt_frame.pack(side="left", fill="y", pady=10)
+            
+            tk.Label(txt_frame, text="Rare Catch!", font=("Segoe UI", 12, "bold"), fg=THEME_ACCENT, bg=THEME_NOTIF_BG, anchor="w").pack(fill="x")
+            tk.Label(txt_frame, text="You fished up a Devil Fruit!", font=("Segoe UI", 9), fg="white", bg=THEME_NOTIF_BG, anchor="w").pack(fill="x")
+            
+            # Auto-close after 5s
+            notif.after(5000, notif.destroy)
+            
+        except Exception as e:
+            print(f"Notification Error: {e}")
 
     # --- UI SETUP ---
     def setup_ui(self):
@@ -384,6 +506,11 @@ class KarooFish:
         self.create_section(frame, "Hotkeys")
         for k, label in [('toggle_loop', 'Loop'), ('toggle_overlay', 'Overlay'), ('toggle_afk', 'AFK'), ('exit', 'Exit')]:
             self.create_hotkey_row(frame, label, k)
+            
+        # --- NOTIFICATION TOGGLE ---
+        self.create_section(frame, "Notifications")
+        self.notify_enabled_var = tk.BooleanVar(value=True)
+        self.create_toggle(frame, "Enable Rare Catch Alerts", self.notify_enabled_var)
         
         # --- SAVE CONTROLS ---
         self.create_section(frame, "Configuration")
@@ -453,7 +580,7 @@ class KarooFish:
         self.profile_total_label = tk.Label(s_card, text=str(self.stats['total_caught']), font=("Segoe UI", 36, "bold"), bg=THEME_CARD, fg=THEME_ACCENT)
         self.profile_total_label.pack()
         
-        tk.Label(self.page_profile, text="Recent Sessions", font=FONT_BOLD, bg=THEME_BG, fg="white").pack(anchor="w", padx=20, pady=(20, 5))
+        tk.Label(self.page_profile, text="Rare Finds & History", font=FONT_BOLD, bg=THEME_BG, fg="white").pack(anchor="w", padx=20, pady=(20, 5))
         hist_frame = tk.Frame(self.page_profile, bg=THEME_CARD)
         hist_frame.pack(fill="both", expand=True, padx=20, pady=0)
         
@@ -472,11 +599,20 @@ class KarooFish:
         self.profile_total_label.config(text=str(self.stats['total_caught']))
         self.afk_total_label.config(text=str(self.stats['total_caught'] + self.session_loops))
         self.hist_list.delete(0, tk.END)
+        
+        # Show Rare Catches First
+        if "rare_catches" in self.stats:
+            for rare in self.stats["rare_catches"]:
+                self.hist_list.insert(tk.END, f"★ {rare['date']} - {rare['item']}")
+            if self.stats["rare_catches"]:
+                self.hist_list.insert(tk.END, "-" * 40)
+
+        # Show History
         for entry in self.stats['history']:
             d = entry['date']
             c = str(entry['count'])
-            spacer = "." * (40 - len(d) - len(c))
-            self.hist_list.insert(tk.END, f"{d} {spacer} +{c}")
+            spacer = "." * (35 - len(d) - len(c))
+            self.hist_list.insert(tk.END, f"{d} {spacer} +{c} caught")
 
     def show_profile(self):
         self.refresh_profile_ui()
@@ -531,7 +667,6 @@ class KarooFish:
         self.last_user_activity = time.time()
 
     def check_auto_afk(self):
-        # Check AFK only if Fishing Bot is active
         if self.auto_afk_var.get() and self.fishing_active and not self.afk_mode_active:
             idle_time = time.time() - self.last_user_activity
             if idle_time > self.auto_afk_seconds_var.get():
@@ -542,7 +677,6 @@ class KarooFish:
         try:
             keyboard.unhook_all()
             for k, f in [('toggle_loop', self.toggle_loop), ('toggle_overlay', self.toggle_overlay), ('toggle_afk', self.toggle_afk), ('exit', self.exit_app)]:
-                # Use saved key if available
                 key_name = self.hotkeys.get(k, '')
                 if key_name:
                     keyboard.add_hotkey(key_name, lambda f=f: self.root.after(0, f))
@@ -563,20 +697,16 @@ class KarooFish:
             self.last_user_activity = time.time()
 
     def toggle_loop(self):
-        # Determine current tab
         current_tab = self.notebook.index(self.notebook.select())
-        
-        if current_tab == 0: # Fishing Tab
-            self.toggle_fishing()
-        elif current_tab == 1: # Reroll Tab
-            self.toggle_reroll()
+        if current_tab == 0: self.toggle_fishing()
+        elif current_tab == 1: self.toggle_reroll()
 
     def toggle_fishing(self):
-        if self.reroll_active: return # Cannot run both
+        if self.reroll_active: return
         self.fishing_active = not self.fishing_active
         if self.fishing_active:
             req = []
-            if self.auto_purchase_var.get(): req.extend([1,2,3,4]) # Added Pt3 as required for Auto Buy
+            if self.auto_purchase_var.get(): req.extend([1,2,3,4])
             if self.item_check_var.get(): req.extend([5,7])
             if self.auto_bait_var.get(): req.append(6)
             
@@ -650,7 +780,6 @@ class KarooFish:
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
-            print(f"Clicking: {debug_name} at {x},{y}")
             win32api.SetCursorPos((x, y))
             time.sleep(0.02)
             win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0)
@@ -666,8 +795,6 @@ class KarooFish:
         try:
             self.is_performing_action = True 
             if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]): return
-            
-            # 1. Standard Purchase Flow
             keyboard.press_and_release('e')
             time.sleep(self.purchase_delay_after_key)
             self.click(self.point_coords[1], "Pt 1 (Yes)")
@@ -683,7 +810,7 @@ class KarooFish:
             self.move_to(self.point_coords[4])
             time.sleep(self.purchase_click_delay)
 
-            # 2. Check Pt 3 for "Red" (Menu Stuck Open)
+            # Check Pt 3 for "Red"
             if self.point_coords[3]:
                 frame = None
                 if self.camera and self.camera.is_capturing:
@@ -697,20 +824,15 @@ class KarooFish:
                     p3 = self.point_coords[3]
                     cx, cy = int(p3[0]), int(p3[1])
                     if cy < frame.shape[0] and cx < frame.shape[1]:
-                        # BGR Check
                         b, g, r = frame[cy, cx]
                         if r > 200 and g < 50 and b < 50:
-                            print("Red detected at Pt 3 (Menu stuck). Forcing close.")
                             self.click(p3, "Pt 3 (Force Close)")
                             time.sleep(0.5)
                             self.click(self.point_coords[2], "Pt 2 (Post-Close Safety)")
                             time.sleep(0.5)
                             self.move_to(self.point_coords[4])
-
-        except Exception as e:
-            print(f"Auto Purchase Error: {e}")
-        finally: 
-            self.is_performing_action = False
+        except Exception: pass
+        finally: self.is_performing_action = False
 
     def perform_store_fruit(self):
         p5, p7 = self.point_coords.get(5), self.point_coords.get(7)
@@ -787,7 +909,6 @@ class KarooFish:
         if self.camera and not self.camera.is_capturing:
             self.camera.start(target_fps=60, video_mode=True)
 
-        # Counter for consecutive black frames
         black_screen_strikes = 0 
 
         try:
@@ -807,19 +928,14 @@ class KarooFish:
                     time.sleep(0.01)
                     continue
                 
-                # --- TRANSIENT BLACK SCREEN FIX ---
-                # Use max(img) instead of sum() for speed. If max is 0, the whole image is black.
+                # Black Screen Handling
                 if np.max(img_full) == 0:
                     black_screen_strikes += 1
-                    
-                    # If we have less than 20 consecutive bad frames, just skip this iteration.
-                    # This allows momentary glitches to pass without killing the camera.
                     if black_screen_strikes < 20:
                         time.sleep(0.01)
                         continue
                     else:
-                        # Real persistent black screen detected (>0.3s). Reset Camera.
-                        print("Persistent Black Screen detected. Resetting Camera...")
+                        print("Black Screen. Resetting Camera...")
                         try: self.camera.stop()
                         except: pass
                         del self.camera
@@ -830,9 +946,25 @@ class KarooFish:
                         black_screen_strikes = 0
                         continue
                 
-                # If we get a good frame, reset the strike counter
                 black_screen_strikes = 0
-                # ----------------------------------
+                
+                # --- NOTIFICATION SCANNER ---
+                # Scan top 15%, middle 40%
+                full_h, full_w, _ = img_full.shape
+                notif_crop = img_full[0:int(full_h * 0.15), int(full_w * 0.3):int(full_w * 0.7)]
+                
+                # Check for Orange Text (#e68948 -> BGR: 72, 137, 230)
+                b_channel = notif_crop[:, :, 0]
+                g_channel = notif_crop[:, :, 1]
+                r_channel = notif_crop[:, :, 2]
+                
+                mask = (b_channel > 40) & (b_channel < 100) & \
+                       (g_channel > 100) & (g_channel < 170) & \
+                       (r_channel > 200)
+                
+                if np.count_nonzero(mask) > 50:
+                    self.trigger_rare_catch_notification()
+                # ----------------------------
 
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 width, height = self.overlay_area['width'], self.overlay_area['height']
@@ -1011,7 +1143,6 @@ class KarooFish:
     def run_reroll_loop(self):
         print("Reroll Loop Started")
         
-        # Lazy Load Camera
         if self.camera is None: 
             try: self.camera = dxcam.create(output_color="BGR")
             except: pass
@@ -1030,7 +1161,7 @@ class KarooFish:
                     time.sleep(0.01)
                     continue
                 
-                # --- TRANSIENT BLACK SCREEN FIX (Reroll Version) ---
+                # Black Screen Fix
                 if np.max(img) == 0:
                     black_screen_strikes += 1
                     if black_screen_strikes < 20:
@@ -1048,11 +1179,9 @@ class KarooFish:
                         continue
                 
                 black_screen_strikes = 0
-                # ---------------------------------------------------
                 
                 if cy < img.shape[0] and cx < img.shape[1]:
                     b, g, r = img[cy, cx]
-                    # Check for Gold #b37a00 (R:179, G:122, B:0) +/- 35
                     if (abs(r - 179) < 35) and (abs(g - 122) < 35) and (abs(b - 0) < 35):
                         print("Reroll Button Detected. Clicking.")
                         self.click(p8, "Reroll")
