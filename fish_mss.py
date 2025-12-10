@@ -720,31 +720,50 @@ class KarooFish:
 
     def perform_store_fruit(self):
         try:
-            # --- COLOR CHECK START ---
+            # --- COLOR CHECK (Running on RDP Minimized) ---
             p7 = self.point_coords.get(7)
             if p7:
                 with mss.mss() as sct:
+                    # We check P7. If it's the specific White OR Black color, we proceed.
                     b, g, r = self.get_pixel_color_at_pt(sct, p7)
-                    # White check (>210) OR Black check (<30)
+                    
+                    # White check (>210)
                     is_white = (r > 210 and g > 210 and b > 210)
+                    # Black check (<30)
                     is_black = (r < 30 and g < 30 and b < 30)
                     
                     if not (is_white or is_black):
-                        # If it is neither white nor black, skip storage
                         return
-            # --- COLOR CHECK END ---
-
+            
             self.is_performing_action = True 
-            keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
-            keyboard.press('3'); time.sleep(0.25); keyboard.release('3')
+            
+            # Open Menu Sequence
+            keyboard.press('2'); time.sleep(0.2); keyboard.release('2')
+            time.sleep(0.5)
+            keyboard.press('3'); time.sleep(0.2); keyboard.release('3')
+            
             time.sleep(self.clean_step_delay)
+            
+            # Click Store 3 times
             if self.point_coords.get(5):
                 for i in range(3):
-                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.35); time.sleep(0.8)
-            keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
+                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.35)
+                    time.sleep(0.8)
+            
+            # --- UPDATED EXIT SEQUENCE ---
+            # Press Backspace to close menu as requested
+            time.sleep(0.5)
+            keyboard.press('backspace'); time.sleep(0.2); keyboard.release('backspace')
+            
+            # Move mouse away to reset focus/visibility
             self.move_to(self.point_coords[4]); time.sleep(0.5)
-        except: keyboard.press_and_release('2')
-        finally: self.is_performing_action = False
+            
+        except Exception as e: 
+            print(f"Store Error: {e}")
+            # Failsafe: Try to close with Backspace if error occurs
+            keyboard.press('backspace'); time.sleep(0.2); keyboard.release('backspace')
+        finally: 
+            self.is_performing_action = False
 
     def perform_bait_select(self):
         if not self.auto_bait_var.get(): return
