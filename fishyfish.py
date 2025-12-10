@@ -6,7 +6,7 @@ from pynput import keyboard as pynput_keyboard
 from pynput import mouse as pynput_mouse
 import sys
 import ctypes
-import dxcam
+import mss  # CHANGED: Replaced dxcam with mss
 import win32api
 import win32con
 from PIL import Image, ImageTk, ImageEnhance, ImageOps, ImageDraw
@@ -54,7 +54,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish - RDP Delay")
+        self.root.title("Karoo Fish - MSS/CPU Version")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -79,6 +79,7 @@ class KarooFish:
         self.cached_notif_icon = None
         
         # --- RDP FIX: Screen Dimensions ---
+        # NOTE: We now get these dynamically in move_to to handle resizing
         self.screen_width = win32api.GetSystemMetrics(0)
         self.screen_height = win32api.GetSystemMetrics(1)
         
@@ -111,7 +112,7 @@ class KarooFish:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         
-        self.camera = None
+        # self.camera removed for MSS
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         self.point_labels = {} 
 
@@ -646,23 +647,28 @@ class KarooFish:
         pynput_keyboard.Listener(on_press=on_press).start()
 
     # --- HIGH LATENCY / RDP OPTIMIZED MOUSE ACTIONS ---
-    # These functions are intentionally slow and redundant to handle laggy connections.
+    # MODIFIED: Dynamically checks screen metrics to handle resizing
     
     def move_to(self, pt):
         if not pt: return
         try:
+            # --- FIX: GET METRICS DYNAMICALLY ---
+            current_w = win32api.GetSystemMetrics(0)
+            current_h = win32api.GetSystemMetrics(1)
+            
             x, y = int(pt[0]), int(pt[1])
-            # Normalize to 65535 (Absolute coordinates required for RDP)
-            nx = int(x * 65535 / self.screen_width)
-            ny = int(y * 65535 / self.screen_height)
+            
+            # Recalculate based on current resolution
+            nx = int(x * 65535 / current_w)
+            ny = int(y * 65535 / current_h)
             
             # 1. Move
             win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
-            time.sleep(0.1) # Wait for visual update
+            time.sleep(0.05) 
             
             # 2. Move AGAIN (Redundancy check for packet loss)
             win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
-            time.sleep(0.1)
+            time.sleep(0.05)
         except Exception: pass
 
     def click(self, pt, debug_name="Target", hold_time=0.2):
@@ -724,17 +730,17 @@ class KarooFish:
             self.move_to(self.point_coords[4])
             time.sleep(1.0)
 
-            # Robust Camera Check for Red/Stuck Menu
+            # Robust Camera Check for Red/Stuck Menu (Using MSS)
             if self.point_coords[3]:
                 frame = None
-                if self.camera and self.camera.is_capturing:
-                    frame = self.camera.get_latest_frame()
-                else:
-                    try:
-                        tmp_cam = dxcam.create(output_color="BGR")
-                        frame = tmp_cam.grab()
-                        del tmp_cam
-                    except: pass
+                try:
+                    with mss.mss() as sct:
+                        # Grab small area or full screen
+                        mon = sct.monitors[1]
+                        frame = np.array(sct.grab(mon))
+                        frame = frame[:, :, :3] # Remove alpha
+                except: pass
+                
                 if frame is not None:
                     p3 = self.point_coords[3]
                     cx, cy = int(p3[0]), int(p3[1])
@@ -753,13 +759,19 @@ class KarooFish:
     def perform_store_fruit(self):
         p5, p7 = self.point_coords.get(5), self.point_coords.get(7)
         if not p5 or not p7: return
+        
         def is_white_icon_visible():
-            img = self.camera.get_latest_frame()
-            if img is None: return False
-            cx, cy = int(p7[0]), int(p7[1])
-            if cy >= img.shape[0] or cx >= img.shape[1]: return False
-            b, g, r = img[cy, cx]
-            return (r > 200 and g > 200 and b > 200)
+            try:
+                with mss.mss() as sct:
+                    mon = sct.monitors[1]
+                    img = np.array(sct.grab(mon))
+                    img = img[:, :, :3]
+                    cx, cy = int(p7[0]), int(p7[1])
+                    if cy >= img.shape[0] or cx >= img.shape[1]: return False
+                    b, g, r = img[cy, cx]
+                    return (r > 200 and g > 200 and b > 200)
+            except: return False
+
         try:
             self.is_performing_action = True 
             keyboard.press_and_release('2')
@@ -821,250 +833,232 @@ class KarooFish:
         time.sleep(2.0)
 
     def run_fishing_loop(self):
-        print("Fishing Loop Started (RDP Optimized)")
+        print("Fishing Loop Started (MSS/CPU Version)")
         target_color = (0x55, 0xaa, 0xff) 
         dark_color = (0x19, 0x19, 0x19)
         white_color = (0xff, 0xff, 0xff)
         
-        # DXCam Safety Init
-        if self.camera is None: 
-            try: self.camera = dxcam.create(output_color="BGR")
-            except: 
-                print("DXCam Init Failed (No GPU?). Fishing may fail.")
-                pass
+        # MSS Context
+        with mss.mss() as sct:
+            # We assume monitor 1 is main. In some RDP setups, it might be 0 or 1.
+            # Usually 1 is safe for full screen capture.
+            monitor_info = sct.monitors[1]
+            
+            black_screen_strikes = 0 
+            try:
+                if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
+                self.cast()
+                last_detection_time = time.time()
+                was_detecting = False
 
-        if self.camera and not self.camera.is_capturing:
-            try: self.camera.start(target_fps=60, video_mode=True)
-            except: pass
+                while self.fishing_active:
+                    if self.is_performing_action:
+                        time.sleep(0.1)
+                        continue
 
-        black_screen_strikes = 0 
-        try:
-            if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
-            self.cast()
-            last_detection_time = time.time()
-            was_detecting = False
-
-            while self.fishing_active:
-                if self.is_performing_action:
-                    time.sleep(0.1)
-                    continue
-
-                if self.camera:
-                    img_full = self.camera.get_latest_frame()
-                else:
-                    time.sleep(0.1)
-                    continue
-                
-                if img_full is None:
-                    time.sleep(0.01)
-                    continue
-                
-                # RDP Black Screen check
-                if np.max(img_full) == 0:
-                    black_screen_strikes += 1
-                    if black_screen_strikes < 20:
+                    # Grab Frame via CPU
+                    try:
+                        sct_img = sct.grab(monitor_info)
+                        img_full = np.array(sct_img)
+                        # MSS returns BGRA, we want BGR
+                        img_full = img_full[:, :, :3]
+                    except Exception as e:
+                        print(f"MSS Grab Error: {e}")
+                        time.sleep(0.1)
+                        continue
+                    
+                    if img_full is None:
                         time.sleep(0.01)
                         continue
-                    else:
-                        try: self.camera.stop()
-                        except: pass
-                        del self.camera
-                        self.camera = None
-                        time.sleep(1.0)
-                        try:
-                            self.camera = dxcam.create(output_color="BGR")
-                            self.camera.start(target_fps=60, video_mode=True)
-                        except: pass
-                        black_screen_strikes = 0
+                    
+                    # RDP Black Screen check
+                    if np.max(img_full) == 0:
+                        black_screen_strikes += 1
+                        if black_screen_strikes < 20:
+                            time.sleep(0.01)
+                            continue
+                        else:
+                            # In MSS version, black screen means RDP is totally suspended
+                            # We just wait it out
+                            time.sleep(1.0)
+                            continue
+                    
+                    black_screen_strikes = 0
+                    
+                    # Notification detection
+                    full_h, full_w, _ = img_full.shape
+                    notif_crop = img_full[0:int(full_h * 0.15), int(full_w * 0.3):int(full_w * 0.7)]
+                    b_channel = notif_crop[:, :, 0]
+                    g_channel = notif_crop[:, :, 1]
+                    r_channel = notif_crop[:, :, 2]
+                    mask = (b_channel > 40) & (b_channel < 100) & (g_channel > 100) & (g_channel < 170) & (r_channel > 200)
+                    if np.count_nonzero(mask) > 50: self.trigger_rare_catch_notification()
+
+                    x, y = self.overlay_area['x'], self.overlay_area['y']
+                    width, height = self.overlay_area['width'], self.overlay_area['height']
+                    
+                    if y + height > img_full.shape[0] or x + width > img_full.shape[1]: img = img_full 
+                    else: img = img_full[y:y+height, x:x+width]
+
+                    point1_x = None; point1_y = None; found_first = False
+                    for row_idx in range(height):
+                        for col_idx in range(width):
+                            b, g, r = img[row_idx, col_idx, 0:3]
+                            if r == target_color[0] and g == target_color[1] and b == target_color[2]:
+                                point1_x = x + col_idx; point1_y = y + row_idx; found_first = True; break
+                        if found_first: break
+
+                    if not found_first:
+                        current_time = time.time()
+                        if was_detecting:
+                            print("Lost detection (Game Over).")
+                            time.sleep(self.wait_after_loss)
+                            was_detecting = False
+                            self.is_clicking = False
+                            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                            if self.auto_purchase_var.get():
+                                self.purchase_counter += 1
+                                if self.purchase_counter >= self.loops_var.get():
+                                    self.perform_auto_purchase_sequence()
+                                    self.purchase_counter = 0
+                            if self.item_check_var.get(): self.perform_store_fruit()
+                            if self.auto_bait_var.get(): self.perform_bait_select()
+                            self.cast()
+                            last_detection_time = time.time()
+                        elif current_time - last_detection_time > self.scan_timeout:
+                            print("Timeout. Recasting...")
+                            if self.item_check_var.get(): self.perform_store_fruit()
+                            if self.auto_bait_var.get(): self.perform_bait_select()
+                            self.cast()
+                            last_detection_time = time.time()
+                        time.sleep(0.1)
                         continue
-                
-                black_screen_strikes = 0
-                
-                # Notification detection
-                full_h, full_w, _ = img_full.shape
-                notif_crop = img_full[0:int(full_h * 0.15), int(full_w * 0.3):int(full_w * 0.7)]
-                b_channel = notif_crop[:, :, 0]
-                g_channel = notif_crop[:, :, 1]
-                r_channel = notif_crop[:, :, 2]
-                mask = (b_channel > 40) & (b_channel < 100) & (g_channel > 100) & (g_channel < 170) & (r_channel > 200)
-                if np.count_nonzero(mask) > 50: self.trigger_rare_catch_notification()
 
-                x, y = self.overlay_area['x'], self.overlay_area['y']
-                width, height = self.overlay_area['width'], self.overlay_area['height']
-                
-                if y + height > img_full.shape[0] or x + width > img_full.shape[1]: img = img_full 
-                else: img = img_full[y:y+height, x:x+width]
-
-                point1_x = None; point1_y = None; found_first = False
-                for row_idx in range(height):
-                    for col_idx in range(width):
+                    point2_x = None; row_idx = point1_y - y
+                    for col_idx in range(width - 1, -1, -1):
                         b, g, r = img[row_idx, col_idx, 0:3]
                         if r == target_color[0] and g == target_color[1] and b == target_color[2]:
-                            point1_x = x + col_idx; point1_y = y + row_idx; found_first = True; break
-                    if found_first: break
+                            point2_x = x + col_idx; break
+                    
+                    if point2_x is None: time.sleep(0.01); continue
 
-                if not found_first:
-                    current_time = time.time()
-                    if was_detecting:
-                        print("Lost detection (Game Over).")
-                        time.sleep(self.wait_after_loss)
-                        was_detecting = False
-                        self.is_clicking = False
-                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                        if self.auto_purchase_var.get():
-                            self.purchase_counter += 1
-                            if self.purchase_counter >= self.loops_var.get():
-                                self.perform_auto_purchase_sequence()
-                                self.purchase_counter = 0
-                        if self.item_check_var.get(): self.perform_store_fruit()
-                        if self.auto_bait_var.get(): self.perform_bait_select()
-                        self.cast()
+                    temp_area_width = point2_x - point1_x + 1
+                    temp_x_offset = point1_x - x
+                    temp_img = img[:, temp_x_offset:temp_x_offset + temp_area_width]
+
+                    top_y = None
+                    for r_idx in range(height):
+                        found_dark = False
+                        for c_idx in range(temp_area_width):
+                            b, g, r = temp_img[r_idx, c_idx, 0:3]
+                            if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
+                                top_y = y + r_idx; found_dark = True; break
+                        if found_dark: break
+                    
+                    bottom_y = None
+                    for r_idx in range(height - 1, -1, -1):
+                        found_dark = False
+                        for c_idx in range(temp_area_width):
+                            b, g, r = temp_img[r_idx, c_idx, 0:3]
+                            if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
+                                bottom_y = y + r_idx; found_dark = True; break
+                        if found_dark: break
+
+                    if top_y is None or bottom_y is None: time.sleep(0.1); continue
+
+                    real_height = bottom_y - top_y + 1
+                    real_img = img[top_y-y:top_y-y+real_height, temp_x_offset:temp_x_offset+temp_area_width]
+                    
+                    white_top_y = None
+                    for r_idx in range(real_height):
+                        for c_idx in range(temp_area_width):
+                            b, g, r = real_img[r_idx, c_idx, 0:3]
+                            if r == white_color[0] and g == white_color[1] and b == white_color[2]:
+                                white_top_y = top_y + r_idx; break
+                        if white_top_y is not None: break
+
+                    if white_top_y is None: continue
+
+                    dark_sections = []
+                    current_section_start = None; gap_counter = 0; max_gap = (real_height * 0.2) if white_top_y else 3
+                    for r_idx in range(real_height):
+                        has_dark = False
+                        for c_idx in range(temp_area_width):
+                            b, g, r = real_img[r_idx, c_idx, 0:3]
+                            if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
+                                has_dark = True; break
+                        if has_dark:
+                            gap_counter = 0
+                            if current_section_start is None: current_section_start = top_y + r_idx
+                        else:
+                            if current_section_start is not None:
+                                gap_counter += 1
+                                if gap_counter > max_gap:
+                                    section_end = top_y + r_idx - gap_counter
+                                    dark_sections.append({'middle': (current_section_start + section_end) // 2, 'size': section_end - current_section_start})
+                                    current_section_start = None; gap_counter = 0
+                    if current_section_start is not None:
+                        section_end = top_y + real_height - 1 - gap_counter
+                        dark_sections.append({'middle': (current_section_start + section_end) // 2, 'size': section_end - current_section_start})
+
+                    if dark_sections and white_top_y is not None:
+                        was_detecting = True
                         last_detection_time = time.time()
-                    elif current_time - last_detection_time > self.scan_timeout:
-                        print("Timeout. Recasting...")
-                        if self.item_check_var.get(): self.perform_store_fruit()
-                        if self.auto_bait_var.get(): self.perform_bait_select()
-                        self.cast()
-                        last_detection_time = time.time()
-                    time.sleep(0.1)
-                    continue
+                        largest_section = max(dark_sections, key=lambda s: s['size'])
+                        raw_error = largest_section['middle'] - white_top_y
+                        normalized_error = raw_error / real_height if real_height > 0 else raw_error
+                        derivative = normalized_error - self.previous_error
+                        self.previous_error = normalized_error
+                        pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
+                        time_since_cast = time.time() - self.last_cast_time
+                        if pd_output > 0:
+                            if time_since_cast > 3.0: 
+                                if not self.is_clicking:
+                                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                                    self.is_clicking = True
+                        else:
+                            if self.is_clicking:
+                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                                self.is_clicking = False
+                    
+                    # MSS scan rate control
+                    time.sleep(0.05)
 
-                point2_x = None; row_idx = point1_y - y
-                for col_idx in range(width - 1, -1, -1):
-                    b, g, r = img[row_idx, col_idx, 0:3]
-                    if r == target_color[0] and g == target_color[1] and b == target_color[2]:
-                        point2_x = x + col_idx; break
-                
-                if point2_x is None: time.sleep(0.01); continue
-
-                temp_area_width = point2_x - point1_x + 1
-                temp_x_offset = point1_x - x
-                temp_img = img[:, temp_x_offset:temp_x_offset + temp_area_width]
-
-                top_y = None
-                for r_idx in range(height):
-                    found_dark = False
-                    for c_idx in range(temp_area_width):
-                        b, g, r = temp_img[r_idx, c_idx, 0:3]
-                        if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
-                            top_y = y + r_idx; found_dark = True; break
-                    if found_dark: break
-                
-                bottom_y = None
-                for r_idx in range(height - 1, -1, -1):
-                    found_dark = False
-                    for c_idx in range(temp_area_width):
-                        b, g, r = temp_img[r_idx, c_idx, 0:3]
-                        if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
-                            bottom_y = y + r_idx; found_dark = True; break
-                    if found_dark: break
-
-                if top_y is None or bottom_y is None: time.sleep(0.1); continue
-
-                real_height = bottom_y - top_y + 1
-                real_img = img[top_y-y:top_y-y+real_height, temp_x_offset:temp_x_offset+temp_area_width]
-                
-                white_top_y = None
-                for r_idx in range(real_height):
-                    for c_idx in range(temp_area_width):
-                        b, g, r = real_img[r_idx, c_idx, 0:3]
-                        if r == white_color[0] and g == white_color[1] and b == white_color[2]:
-                            white_top_y = top_y + r_idx; break
-                    if white_top_y is not None: break
-
-                if white_top_y is None: continue
-
-                dark_sections = []
-                current_section_start = None; gap_counter = 0; max_gap = (real_height * 0.2) if white_top_y else 3
-                for r_idx in range(real_height):
-                    has_dark = False
-                    for c_idx in range(temp_area_width):
-                        b, g, r = real_img[r_idx, c_idx, 0:3]
-                        if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
-                            has_dark = True; break
-                    if has_dark:
-                        gap_counter = 0
-                        if current_section_start is None: current_section_start = top_y + r_idx
-                    else:
-                        if current_section_start is not None:
-                            gap_counter += 1
-                            if gap_counter > max_gap:
-                                section_end = top_y + r_idx - gap_counter
-                                dark_sections.append({'middle': (current_section_start + section_end) // 2, 'size': section_end - current_section_start})
-                                current_section_start = None; gap_counter = 0
-                if current_section_start is not None:
-                    section_end = top_y + real_height - 1 - gap_counter
-                    dark_sections.append({'middle': (current_section_start + section_end) // 2, 'size': section_end - current_section_start})
-
-                if dark_sections and white_top_y is not None:
-                    was_detecting = True
-                    last_detection_time = time.time()
-                    largest_section = max(dark_sections, key=lambda s: s['size'])
-                    raw_error = largest_section['middle'] - white_top_y
-                    normalized_error = raw_error / real_height if real_height > 0 else raw_error
-                    derivative = normalized_error - self.previous_error
-                    self.previous_error = normalized_error
-                    pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
-                    time_since_cast = time.time() - self.last_cast_time
-                    if pd_output > 0:
-                        if time_since_cast > 3.0: 
-                            if not self.is_clicking:
-                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                                self.is_clicking = True
-                    else:
-                        if self.is_clicking:
-                            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                            self.is_clicking = False
-                
-                # RDP OPTIMIZATION: Scan slower to reduce CPU and match RDP stream speed
-                time.sleep(0.05)
-
-        except Exception as e: print(f"Error in fishing loop: {e}")
-        finally:
-            if self.camera: self.camera.stop()
-            if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            self.is_clicking = False
-            self.save_config()
+            except Exception as e: print(f"Error in fishing loop: {e}")
+            finally:
+                if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                self.is_clicking = False
+                self.save_config()
 
     def run_reroll_loop(self):
-        print("Reroll Loop Started")
-        if self.camera is None: 
-            try: self.camera = dxcam.create(output_color="BGR")
-            except: pass
-        if self.camera and not self.camera.is_capturing: 
-            try: self.camera.start(target_fps=30, video_mode=True)
-            except: pass
-        black_screen_strikes = 0
-        try:
-            p8 = self.point_coords.get(8)
-            cx, cy = int(p8[0]), int(p8[1])
-            while self.reroll_active:
-                if self.camera: img = self.camera.get_latest_frame()
-                else: img = None
-                
-                if img is None: time.sleep(0.01); continue
-                
-                if np.max(img) == 0:
-                    black_screen_strikes += 1
-                    if black_screen_strikes < 20: time.sleep(0.01); continue
-                    else:
-                        try: self.camera.stop()
-                        except: pass
-                        del self.camera; self.camera = None; time.sleep(1.0)
-                        try: self.camera = dxcam.create(output_color="BGR"); self.camera.start(target_fps=30, video_mode=True)
-                        except: pass
-                        black_screen_strikes = 0; continue
-                black_screen_strikes = 0
-                if cy < img.shape[0] and cx < img.shape[1]:
-                    b, g, r = img[cy, cx]
-                    if (abs(r - 179) < 35) and (abs(g - 122) < 35) and (abs(b - 0) < 35):
-                        self.click(p8, "Reroll")
-                        time.sleep(0.2)
-                time.sleep(0.1)
-        except Exception as e: print(f"Error in reroll loop: {e}")
-        finally:
-            if self.camera: self.camera.stop()
-            self.save_config()
+        print("Reroll Loop Started (MSS Version)")
+        with mss.mss() as sct:
+            mon = sct.monitors[1]
+            try:
+                p8 = self.point_coords.get(8)
+                cx, cy = int(p8[0]), int(p8[1])
+                while self.reroll_active:
+                    try:
+                        sct_img = sct.grab(mon)
+                        img = np.array(sct_img)
+                        img = img[:, :, :3]
+                    except: 
+                        time.sleep(0.1)
+                        continue
+                    
+                    if np.max(img) == 0:
+                        time.sleep(1.0)
+                        continue
+                    
+                    if cy < img.shape[0] and cx < img.shape[1]:
+                        b, g, r = img[cy, cx]
+                        if (abs(r - 179) < 35) and (abs(g - 122) < 35) and (abs(b - 0) < 35):
+                            self.click(p8, "Reroll")
+                            time.sleep(0.2)
+                    time.sleep(0.1)
+            except Exception as e: print(f"Error in reroll loop: {e}")
+            finally:
+                self.save_config()
 
     def toggle_overlay(self):
         self.overlay_active = not self.overlay_active
@@ -1147,9 +1141,6 @@ class KarooFish:
         self.destroy_overlay()
         try: keyboard.unhook_all()
         except: pass
-        if self.camera: 
-            try: self.camera.stop()
-            except: pass
         self.root.destroy()
         sys.exit()
 
