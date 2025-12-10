@@ -51,7 +51,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish - RDP Optimized")
+        self.root.title("Karoo Fish - RDP Ultra Stable")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -79,10 +79,10 @@ class KarooFish:
         self.base_width = win32api.GetSystemMetrics(0)
         self.base_height = win32api.GetSystemMetrics(1)
         
-        # --- RDP TIMING VARS ---
-        # Increased for reliability in laggy environments
-        self.rdp_click_hold = 0.15  # Minimum time to hold mouse down
-        self.rdp_move_delay = 0.05  # Time to wait after moving before clicking
+        # --- RDP TIMING VARS (TUNED FOR LAG) ---
+        # Increased to 0.25s minimum to ensure clicks register on laggy connections
+        self.rdp_click_hold = 0.25 
+        self.rdp_move_delay = 0.08 
         
         # --- CONFIG VARS ---
         self.resize_threshold = 10
@@ -99,8 +99,8 @@ class KarooFish:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        self.purchase_delay_after_key = 2.5    # Increased for RDP
-        self.clean_step_delay = 1.5            # Increased for RDP
+        self.purchase_delay_after_key = 2.5
+        self.clean_step_delay = 1.5
         
         self.dpi_scale = self.get_dpi_scale()
         self.overlay_area = {
@@ -674,7 +674,7 @@ class KarooFish:
             time.sleep(self.rdp_move_delay)
         except Exception: pass
 
-    def click(self, pt, debug_name="Target", hold_time=0.2):
+    def click(self, pt, debug_name="Target", hold_time=0.25):
         """
         RDP OPTIMIZATION: Increased hold time. 
         RDP often drops packets if the click is too fast (< 0.1s).
@@ -712,11 +712,11 @@ class KarooFish:
             time.sleep(self.purchase_delay_after_key) 
             
             # 2. Click Yes
-            self.click(self.point_coords[1], "Pt 1 (Yes)", hold_time=0.3)
+            self.click(self.point_coords[1], "Pt 1 (Yes)", hold_time=0.35)
             time.sleep(1.5) 
             
             # 3. Click Input
-            self.click(self.point_coords[2], "Pt 2 (Input)", hold_time=0.3)
+            self.click(self.point_coords[2], "Pt 2 (Input)", hold_time=0.35)
             time.sleep(1.5)
             
             # 4. Type Amount
@@ -726,17 +726,16 @@ class KarooFish:
             time.sleep(1.0)
             
             # 5. Confirm
-            self.click(self.point_coords[1], "Pt 1 (Confirm)", hold_time=0.3)
+            self.click(self.point_coords[1], "Pt 1 (Confirm)", hold_time=0.35)
             time.sleep(2.0) # Wait for "Purchase Successful" text
             
-            # --- FIX: CONSTANT CHECK FOR MENU (POINT 3) ---
+            # --- FIX: CONSTANT CHECK + CLICK INPUT ---
             print("Entering Menu Exit Safety Loop...")
             
             sct = mss.mss()
             
             # Capture the color of Point 3 (No/Exit) RIGHT NOW.
             # We assume the menu is open because we just bought something.
-            # This color is likely the "Button Color".
             target_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
             
             safety_strikes = 0
@@ -745,9 +744,14 @@ class KarooFish:
             while safety_strikes < max_safety_loops:
                 # 1. Click Exit / No
                 self.click(self.point_coords[3], "Pt 3 (Exit Failsafe)", hold_time=0.35)
-                time.sleep(1.5)
+                time.sleep(0.5)
                 
-                # 2. Check if the color CHANGED
+                # 2. Click Input (User Request: "to ensure menu is closed")
+                # This helps deselect the "No" button or clear the UI
+                self.click(self.point_coords[2], "Pt 2 (Input - Safety)", hold_time=0.35)
+                time.sleep(1.0)
+                
+                # 3. Check if the color CHANGED
                 # If the menu closed, the color at Pt 3 should be different (the game world).
                 current_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
                 
@@ -774,16 +778,16 @@ class KarooFish:
         try:
             self.is_performing_action = True 
             # Slower keys for RDP
-            keyboard.press('2'); time.sleep(0.2); keyboard.release('2'); time.sleep(0.5)
-            keyboard.press('3'); time.sleep(0.2); keyboard.release('3')
+            keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
+            keyboard.press('3'); time.sleep(0.25); keyboard.release('3')
             time.sleep(self.clean_step_delay)
             
             if self.point_coords.get(5):
                 for i in range(3):
-                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.3)
+                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.35)
                     time.sleep(0.8)
                     
-            keyboard.press('2'); time.sleep(0.2); keyboard.release('2'); time.sleep(0.5)
+            keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
             self.move_to(self.point_coords[4]); time.sleep(0.5)
         except: keyboard.press_and_release('2')
         finally: self.is_performing_action = False
@@ -794,7 +798,7 @@ class KarooFish:
         if not p6: return
         try:
             self.is_performing_action = True 
-            self.click(p6, "Pt 6 (Bait Select)", hold_time=0.3) 
+            self.click(p6, "Pt 6 (Bait Select)", hold_time=0.35) 
             time.sleep(0.8)
             self.move_to(self.point_coords[4]); time.sleep(0.5)
         except: pass
