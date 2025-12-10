@@ -9,8 +9,8 @@ import ctypes
 import dxcam
 import win32api
 import win32con
-import win32gui  # ADDED: For Click-Through Overlay
-import mss       # ADDED: Required for logic
+import win32gui
+import mss
 from PIL import Image, ImageTk, ImageEnhance, ImageOps, ImageDraw
 import requests
 from io import BytesIO
@@ -92,10 +92,11 @@ class KarooFish:
         self.kd = 0.5
         self.previous_error = 0
         self.scan_timeout = 15.0 
-        self.rdp_click_hold = 0.05 # Minimum hold time
+        self.rdp_click_hold = 0.05 
         
-        self.purchase_delay_after_key = 1.0 # REDUCED from 2.5
-        self.clean_step_delay = 1.0 # REDUCED from 1.5
+        # TIMING TUNING (Reverted to MSS Defaults)
+        self.purchase_delay_after_key = 2.5 
+        self.clean_step_delay = 1.5 
         
         self.dpi_scale = self.get_dpi_scale()
         self.overlay_area = {
@@ -580,7 +581,6 @@ class KarooFish:
             self.afk_session_label.config(text="0"); self.last_user_activity = time.time() 
             self.fishing_status_lbl.config(text="Fishing: ON", fg="#00ff00")
             
-            # --- MAKE OVERLAY CLICK-THROUGH (TRANSPARENT TO MOUSE) ---
             if self.overlay_window: self.set_overlay_click_through(True)
             
             threading.Thread(target=self.run_fishing_loop, daemon=True).start()
@@ -590,7 +590,6 @@ class KarooFish:
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             self.record_session()
             
-            # --- MAKE OVERLAY SOLID (MOVABLE) ---
             if self.overlay_window: self.set_overlay_click_through(False)
 
     def toggle_reroll(self):
@@ -733,10 +732,16 @@ class KarooFish:
         finally: self.is_performing_action = False
 
     def cast(self):
+        """
+        RESTORED MSS TIMING
+        """
         if self.is_performing_action: return 
         self.move_to(self.point_coords[4])
-        time.sleep(0.3)
+        time.sleep(0.5)
+        
+        # 1. HOLD TIME RESTORED (Brilliant Cast)
         self.click(self.point_coords[4], "Cast (RDP Safe)", hold_time=1.9)
+        
         self.is_clicking = False
         self.session_loops += 1
         
@@ -746,8 +751,8 @@ class KarooFish:
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
         self.previous_error = 0
         
-        # DRASTICALLY REDUCED ROD RETURN WAIT (Was 2.5s)
-        time.sleep(0.8) 
+        # 2. BOBBER SETTLE TIME RESTORED (Prevents Early Detection)
+        time.sleep(2.5) 
 
     # --- HYBRID ENGINE: DXCAM CAPTURE + MSS LOGIC ---
     def run_fishing_loop(self):
@@ -809,7 +814,7 @@ class KarooFish:
                 
                 found_first = len(col_indices) > 0
 
-                # === FAST LOGIC START ===
+                # === MSS LOGIC RESTORED ===
                 if not found_first:
                     current_time = time.time()
                     if was_detecting: # Caught
@@ -824,6 +829,7 @@ class KarooFish:
                         if self.item_check_var.get(): self.perform_store_fruit()
                         if self.auto_bait_var.get(): self.perform_bait_select()
                         
+                        # 3. NO EXTRA DELAY - Logic falls through to cast immediately (which handles its own delays)
                         self.cast()
                         last_detection_time = time.time()
                         
@@ -870,8 +876,6 @@ class KarooFish:
                         if self.is_clicking:
                             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                             self.is_clicking = False
-
-                # REMOVED SLEEP FOR MAX SPEED
 
         except Exception as e: print(f"Error in fishing loop: {e}")
         finally:
