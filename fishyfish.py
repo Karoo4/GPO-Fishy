@@ -30,8 +30,8 @@ if not is_admin():
 
 # --- CONFIGURATION ---
 THEME_BG = "#0b0b0b"
-THEME_ACCENT = "#ff8d00" # Orange
-THEME_CARD = "#1a1a1a"   # Dark Grey
+THEME_ACCENT = "#ff8d00" 
+THEME_CARD = "#1a1a1a"   
 THEME_NOTIF_BG = "#222222"
 FONT_MAIN = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 11, "bold")
@@ -42,8 +42,6 @@ VIVI_URL = "https://static0.srcdn.com/wordpress/wp-content/uploads/2023/10/vivi.
 DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2FX8YUuU7OpOA%2Fmaxresdefault.jpg&f=1&nofb=1&ipt=6d669298669fff2e4f438b54453c1f59c1655ca19fa2407ea1c42e471a4d7ab6"
 TITLE_LOGO_URL = "https://image2url.com/images/1765149562249-ff56b103-b5ea-4402-a896-0ed38202b804.png"
 PROFILE_ICON_URL = "https://i.pinimg.com/736x/f1/bb/3d/f1bb3d7b7b2fe3dbf46915f380043be9.jpg"
-
-# NOTIFICATION ASSETS
 NOTIF_AUDIO_URL = "https://www.dropbox.com/scl/fi/u9563mn42ay8rkgm33aod/igoronly.mp3?rlkey=vsqye9u2227x4c36og1myc8eb&st=3pdh75ks&dl=1"
 NOTIF_ICON_URL = "https://media.discordapp.net/attachments/776428933603786772/1447747919246528543/IMG_8252.png?ex=6938bfd1&is=69376e51&hm=ab1926f5459273c16aa1c6498ea96d74ae15b08755ed930a1b5bf615ffc0c31b&=&format=webp&quality=lossless&width=1214&height=1192"
 
@@ -53,7 +51,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish - RDP Stable")
+        self.root.title("Karoo Fish - RDP Optimized")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -78,10 +76,13 @@ class KarooFish:
         self.cached_notif_icon = None
         
         # --- RDP SCALING INIT ---
-        # We capture the screen size at startup. 
-        # If RDP resizes, we use this to calculate the scale factor.
         self.base_width = win32api.GetSystemMetrics(0)
         self.base_height = win32api.GetSystemMetrics(1)
+        
+        # --- RDP TIMING VARS ---
+        # Increased for reliability in laggy environments
+        self.rdp_click_hold = 0.15  # Minimum time to hold mouse down
+        self.rdp_move_delay = 0.05  # Time to wait after moving before clicking
         
         # --- CONFIG VARS ---
         self.resize_threshold = 10
@@ -90,7 +91,7 @@ class KarooFish:
         self.resize_edge = None
         self.border_size = 5      
         
-        self.purchase_counter = 0     
+        self.purchase_counter = 0      
         self.session_loops = 0        
         self.kp = 0.1
         self.kd = 0.5
@@ -98,8 +99,8 @@ class KarooFish:
         self.scan_timeout = 15.0
         self.wait_after_loss = 1.0
         
-        self.purchase_delay_after_key = 2.0   
-        self.clean_step_delay = 1.0           
+        self.purchase_delay_after_key = 2.5    # Increased for RDP
+        self.clean_step_delay = 1.5            # Increased for RDP
         
         self.dpi_scale = self.get_dpi_scale()
         self.overlay_area = {
@@ -110,7 +111,6 @@ class KarooFish:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         
-        # Points: Stored as Pixels (like V1), scaled dynamically at runtime
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         self.point_labels = {} 
 
@@ -131,7 +131,7 @@ class KarooFish:
         self.root.bind_all("<Any-ButtonPress>", self.reset_afk_timer)
         self.check_auto_afk()
 
-    # --- ASSETS & HELPERS (Exact same as V1) ---
+    # --- ASSETS & HELPERS ---
     def cache_notification_assets(self):
         try:
             temp_dir = tempfile.gettempdir()
@@ -255,7 +255,6 @@ class KarooFish:
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         self.save_config()
 
-    # ... [Record Session, Delete Session, Notification Logic - SAME AS V1] ...
     def record_session(self):
         if self.session_loops > 0:
             self.stats["total_caught"] += self.session_loops
@@ -318,7 +317,7 @@ class KarooFish:
             notif.after(5000, notif.destroy)
         except: pass
 
-    # --- UI SETUP (Same as V1) ---
+    # --- UI SETUP ---
     def setup_ui(self):
         style = ttk.Style()
         style.theme_use('default')
@@ -376,7 +375,7 @@ class KarooFish:
         self.loops_var = tk.IntVar(value=10)
         self.create_input(frame, "Loops/Buy:", self.loops_var)
         tk.Label(frame, text="Coordinates:", font=FONT_BOLD, bg=THEME_BG, fg="white").pack(anchor="w", padx=20, pady=(10, 5))
-        plabs = {1: "Pt 1 (Yes)", 2: "Pt 2 (Input)", 3: "Pt 3 (No)", 4: "Pt 4 (Ocean)"}
+        plabs = {1: "Pt 1 (Yes)", 2: "Pt 2 (Input)", 3: "Pt 3 (No / Exit)", 4: "Pt 4 (Ocean)"}
         for i in range(1, 5): self.create_point_row(frame, i, plabs[i])
         self.create_section(frame, "Auto Store Fruit")
         self.item_check_var = tk.BooleanVar(value=True)
@@ -421,7 +420,6 @@ class KarooFish:
         self.status_msg = tk.Label(frame, text="", bg=THEME_BG, fg=THEME_ACCENT)
         self.status_msg.pack(pady=20)
 
-    # ... [Reroll Tab, AFK Widgets, Profile Widgets - Same as V1] ...
     def create_reroll_tab(self, parent):
         frame = tk.Frame(parent, bg=THEME_BG)
         frame.pack(fill="both", expand=True, padx=20, pady=20)
@@ -623,7 +621,6 @@ class KarooFish:
         self.status_msg.config(text=f"Click for Pt {idx}...", fg=THEME_ACCENT)
         def on_click(x, y, button, pressed):
             if pressed:
-                # REVERTED TO PIXELS (More stable)
                 self.point_coords[idx] = (x, y)
                 self.root.after(0, lambda: self.point_labels[idx].config(text=f"{x},{y}", fg="#00ff00"))
                 self.root.after(0, lambda: self.status_msg.config(text=f"Pt {idx} Saved", fg="#00ff00"))
@@ -642,84 +639,152 @@ class KarooFish:
             return False
         pynput_keyboard.Listener(on_press=on_press).start()
 
-    # --- INPUT ENGINE (SCALING AWARE) ---
+    # --- INPUT ENGINE (SCALING + RDP OPTIMIZATION) ---
     def get_scaled_point(self, pt):
-        """Scales stored pixel coordinates to current RDP resolution"""
         if not pt: return None
-        # Get current res
         curr_w = win32api.GetSystemMetrics(0)
         curr_h = win32api.GetSystemMetrics(1)
-        
-        # Calculate ratio from Saved res
         scale_x = curr_w / self.base_width
         scale_y = curr_h / self.base_height
-        
         return (int(pt[0] * scale_x), int(pt[1] * scale_y))
 
     def move_to(self, pt):
+        """
+        RDP OPTIMIZATION: Moves, waits, and moves again.
+        This forces the RDP cursor to sync with the local cursor before clicking.
+        """
         if not pt: return
         scaled = self.get_scaled_point(pt)
         if not scaled: return
         try:
             x, y = scaled
-            # Normalize to 65535 (Absolute coordinates required for RDP)
-            # Use current metrics here
             cw = win32api.GetSystemMetrics(0)
             ch = win32api.GetSystemMetrics(1)
             
+            # Normalize to 65535
             nx = int(x * 65535 / cw)
             ny = int(y * 65535 / ch)
             
-            # Force Cursor Set (Stronger than move)
+            # 1. Set Cursor (Immediate)
             win32api.SetCursorPos((x, y))
-            time.sleep(0.01)
+            time.sleep(self.rdp_move_delay) 
+            
+            # 2. Force Event (RDP Update)
             win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
-            time.sleep(0.05)
+            time.sleep(self.rdp_move_delay)
         except Exception: pass
 
     def click(self, pt, debug_name="Target", hold_time=0.2):
+        """
+        RDP OPTIMIZATION: Increased hold time. 
+        RDP often drops packets if the click is too fast (< 0.1s).
+        """
         if not pt: return
         try:
             self.move_to(pt)
-            # Short wait for RDP to register the move
-            time.sleep(0.1) 
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(max(hold_time, 0.2)) 
+            # Use variable hold time if provided, or default RDP safe time
+            actual_hold = max(hold_time, self.rdp_click_hold)
+            time.sleep(actual_hold) 
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-            time.sleep(0.1)
+            time.sleep(self.rdp_move_delay * 2)
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
     # --- ACTIONS (FISHING) ---
+    def get_pixel_color_at_pt(self, sct, pt):
+        """Gets color of a specific point given an MSS instance"""
+        scaled = self.get_scaled_point(pt)
+        if not scaled: return (0,0,0)
+        monitor = {"top": scaled[1], "left": scaled[0], "width": 1, "height": 1}
+        img = np.array(sct.grab(monitor))
+        # MSS returns BGRA, we want BGR or RGB comparison
+        return (img[0,0,0], img[0,0,1], img[0,0,2]) # B, G, R
+
     def perform_auto_purchase_sequence(self):
         try:
             self.is_performing_action = True 
-            if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]): return
-            keyboard.press('e'); time.sleep(0.2); keyboard.release('e')
+            if not all([self.point_coords[1], self.point_coords[2], self.point_coords[3], self.point_coords[4]]): return
+            
+            print("Starting Auto Purchase...")
+            
+            # 1. Open Shop
+            keyboard.press('e'); time.sleep(0.3); keyboard.release('e')
             time.sleep(self.purchase_delay_after_key) 
-            self.click(self.point_coords[1], "Pt 1 (Yes)"); time.sleep(1.0) 
-            self.click(self.point_coords[2], "Pt 2 (Input)"); time.sleep(1.0)
+            
+            # 2. Click Yes
+            self.click(self.point_coords[1], "Pt 1 (Yes)", hold_time=0.3)
+            time.sleep(1.5) 
+            
+            # 3. Click Input
+            self.click(self.point_coords[2], "Pt 2 (Input)", hold_time=0.3)
+            time.sleep(1.5)
+            
+            # 4. Type Amount
             amount_str = str(self.amount_var.get())
             for char in amount_str:
                 keyboard.write(char); time.sleep(0.2)
             time.sleep(1.0)
-            self.click(self.point_coords[1], "Pt 1 (Confirm)"); time.sleep(1.0)
-            self.click(self.point_coords[2], "Pt 2 (Safety)"); time.sleep(1.0)
-            self.move_to(self.point_coords[4]); time.sleep(1.0)
+            
+            # 5. Confirm
+            self.click(self.point_coords[1], "Pt 1 (Confirm)", hold_time=0.3)
+            time.sleep(2.0) # Wait for "Purchase Successful" text
+            
+            # --- FIX: CONSTANT CHECK FOR MENU (POINT 3) ---
+            print("Entering Menu Exit Safety Loop...")
+            
+            sct = mss.mss()
+            
+            # Capture the color of Point 3 (No/Exit) RIGHT NOW.
+            # We assume the menu is open because we just bought something.
+            # This color is likely the "Button Color".
+            target_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
+            
+            safety_strikes = 0
+            max_safety_loops = 15 # Don't loop forever
+            
+            while safety_strikes < max_safety_loops:
+                # 1. Click Exit / No
+                self.click(self.point_coords[3], "Pt 3 (Exit Failsafe)", hold_time=0.35)
+                time.sleep(1.5)
+                
+                # 2. Check if the color CHANGED
+                # If the menu closed, the color at Pt 3 should be different (the game world).
+                current_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
+                
+                # Calculate difference
+                diff = sum(abs(c - t) for c, t in zip(current_bgr, target_bgr))
+                
+                if diff > 50: 
+                    # Color changed significantly! The menu is likely gone.
+                    print("Menu closed successfully (Color changed).")
+                    break
+                else:
+                    # Color is same. Menu is STUCK.
+                    print(f"Menu stuck (Diff: {diff}). Clicking again...")
+                    safety_strikes += 1
+            
+            # Final reset movement
+            self.move_to(self.point_coords[4])
+            time.sleep(1.0)
+            
         except Exception as e: print(f"Auto Purchase Error: {e}")
         finally: self.is_performing_action = False
 
     def perform_store_fruit(self):
-        # Uses scaled clicks
         try:
             self.is_performing_action = True 
-            keyboard.press_and_release('2'); time.sleep(0.5); keyboard.press_and_release('3')
+            # Slower keys for RDP
+            keyboard.press('2'); time.sleep(0.2); keyboard.release('2'); time.sleep(0.5)
+            keyboard.press('3'); time.sleep(0.2); keyboard.release('3')
             time.sleep(self.clean_step_delay)
-            # Blind store logic for robustness in MSS
+            
             if self.point_coords.get(5):
                 for i in range(3):
-                    self.click(self.point_coords[5], f"Store Click {i+1}"); time.sleep(0.8)
-            keyboard.press_and_release('2'); time.sleep(0.5)
-            self.move_to(self.point_coords[4]); time.sleep(0.2)
+                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.3)
+                    time.sleep(0.8)
+                    
+            keyboard.press('2'); time.sleep(0.2); keyboard.release('2'); time.sleep(0.5)
+            self.move_to(self.point_coords[4]); time.sleep(0.5)
         except: keyboard.press_and_release('2')
         finally: self.is_performing_action = False
 
@@ -729,17 +794,17 @@ class KarooFish:
         if not p6: return
         try:
             self.is_performing_action = True 
-            self.click(p6, "Pt 6 (Bait Select)"); time.sleep(0.5) 
-            self.move_to(self.point_coords[4]); time.sleep(0.2)
+            self.click(p6, "Pt 6 (Bait Select)", hold_time=0.3) 
+            time.sleep(0.8)
+            self.move_to(self.point_coords[4]); time.sleep(0.5)
         except: pass
         finally: self.is_performing_action = False
 
     def cast(self):
         if self.is_performing_action: return 
-        # Original Logic: Move -> Click(Hold) -> Release -> Wait
         self.move_to(self.point_coords[4])
         time.sleep(0.5)
-        self.click(self.point_coords[4], "Cast (Lag Safe)", hold_time=1.9)
+        self.click(self.point_coords[4], "Cast (RDP Safe)", hold_time=1.9)
         self.is_clicking = False
         self.session_loops += 1
         self.last_cast_time = time.time()
@@ -749,15 +814,15 @@ class KarooFish:
              current_total = self.stats['total_caught'] + self.session_loops
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
         self.previous_error = 0
-        time.sleep(2.0)
+        time.sleep(2.5) # Increased wait after cast for RDP
 
     def run_fishing_loop(self):
-        print("Fishing Loop Started (MSS + Scaling)")
+        print("Fishing Loop Started (MSS + Scaling + RDP Opt)")
         target_color = (0x55, 0xaa, 0xff) 
         dark_color = (0x19, 0x19, 0x19)
         white_color = (0xff, 0xff, 0xff)
         
-        sct = mss.mss() # MSS for Background Capture
+        sct = mss.mss() 
         
         black_screen_strikes = 0 
         try:
@@ -767,26 +832,22 @@ class KarooFish:
             was_detecting = False
 
             while self.fishing_active:
-                if self.is_performing_action: time.sleep(0.1); continue
+                if self.is_performing_action: time.sleep(0.2); continue
 
-                # GRAB FRAME (CPU Based)
+                # GRAB FRAME
                 try:
-                    # Monitor 1 is usually the main one
                     monitor = sct.monitors[1]
                     sct_img = sct.grab(monitor)
                     img_full = np.array(sct_img)[:, :, :3]
                 except:
-                    # If handle is lost, try reset
                     sct = mss.mss()
                     time.sleep(1.0)
                     continue
 
                 if np.max(img_full) == 0:
-                    # Black screen = RDP Minimized.
-                    # PAUSE execution to prevent breaking.
                     black_screen_strikes += 1
                     if black_screen_strikes > 5:
-                        print("RDP Suspended (Black Screen). Pausing...")
+                        print("RDP Suspended. Pausing...")
                         time.sleep(2.0)
                         continue
                 else:
@@ -796,7 +857,6 @@ class KarooFish:
                 curr_w = win32api.GetSystemMetrics(0)
                 curr_h = win32api.GetSystemMetrics(1)
                 
-                # If resolution changed, we scale the overlay search area
                 scale_x = curr_w / self.base_width
                 scale_y = curr_h / self.base_height
                 
@@ -805,7 +865,6 @@ class KarooFish:
                 width = int(self.overlay_area['width'] * scale_x)
                 height = int(self.overlay_area['height'] * scale_y)
                 
-                # Bounds check
                 if y + height > img_full.shape[0] or x + width > img_full.shape[1]: img = img_full 
                 else: img = img_full[y:y+height, x:x+width]
 
@@ -886,7 +945,7 @@ class KarooFish:
 
                 if white_top_y is None: continue
 
-                # PD Logic (Same as V1)
+                # PD Logic
                 dark_sections = []
                 current_section_start = None; gap_counter = 0; max_gap = (real_height * 0.2) if white_top_y else 3
                 for r_idx in range(real_height):
