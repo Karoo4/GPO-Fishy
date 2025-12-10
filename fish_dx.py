@@ -708,31 +708,41 @@ class KarooFish:
 
     def perform_store_fruit(self):
         try:
-            # --- COLOR CHECK START ---
+            # --- COLOR CHECK (Using MSS since it's a static check) ---
             p7 = self.point_coords.get(7)
             if p7:
                 with mss.mss() as sct:
                     b, g, r = self.get_pixel_color_at_pt(sct, p7)
-                    # White check (>210) OR Black check (<30)
+                    
                     is_white = (r > 210 and g > 210 and b > 210)
                     is_black = (r < 30 and g < 30 and b < 30)
                     
                     if not (is_white or is_black):
-                        # If it is neither white nor black, skip storage
                         return
-            # --- COLOR CHECK END ---
-
+            
             self.is_performing_action = True 
+            
             keyboard.press('2'); time.sleep(0.1); keyboard.release('2'); time.sleep(0.3)
             keyboard.press('3'); time.sleep(0.1); keyboard.release('3')
+            
             time.sleep(self.clean_step_delay)
+            
             if self.point_coords.get(5):
                 for i in range(3):
-                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.2); time.sleep(0.4)
-            keyboard.press('2'); time.sleep(0.1); keyboard.release('2'); time.sleep(0.3)
+                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.2)
+                    time.sleep(0.4)
+            
+            # --- UPDATED EXIT SEQUENCE (Backspace) ---
+            time.sleep(0.3)
+            keyboard.press('backspace'); time.sleep(0.1); keyboard.release('backspace')
+            
             self.move_to(self.point_coords[4]); time.sleep(0.2)
-        except: keyboard.press_and_release('2')
-        finally: self.is_performing_action = False
+            
+        except Exception as e:
+            print(f"Store Error: {e}")
+            keyboard.press('backspace'); time.sleep(0.1); keyboard.release('backspace')
+        finally: 
+            self.is_performing_action = False
 
     def perform_bait_select(self):
         if not self.auto_bait_var.get(): return
