@@ -51,7 +51,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish - Smart Wait")
+        self.root.title("Karoo Fish - State Machine")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -87,7 +87,7 @@ class KarooFish:
         self.kp = 0.15 
         self.kd = 0.5
         self.previous_error = 0
-        self.scan_timeout = 25.0 # Increased to 25s for "Wait for Bite"
+        self.scan_timeout = 25.0 
         self.wait_after_loss = 1.0
         
         self.purchase_delay_after_key = 2.0   
@@ -710,8 +710,8 @@ class KarooFish:
 
     def cast(self):
         if self.is_performing_action: return 
-        # Short hold time for instant cast reaction
-        self.click(self.point_coords[4], "Cast (Immediate)", hold_time=0.1)
+        # Click ONCE. This casts the rod.
+        self.click(self.point_coords[4], "Cast (Once)", hold_time=0.1)
         self.is_clicking = False
         self.session_loops += 1
         
@@ -720,11 +720,10 @@ class KarooFish:
              current_total = self.stats['total_caught'] + self.session_loops
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
         self.previous_error = 0
-        # No Sleep here: Return control to main loop immediately
 
-    # --- LOOPS (STATE MACHINE) ---
+    # --- LOOPS (STATE MACHINE 4-PHASE) ---
     def run_fishing_loop(self):
-        print("Fishing Loop Started (Reactive State Machine)")
+        print("Fishing Loop Started (4-Phase State Machine)")
         
         target_color = np.array([0xff, 0xaa, 0x55], dtype=np.uint8) # BGR
         dark_color = np.array([0x19, 0x19, 0x19], dtype=np.uint8)
@@ -738,15 +737,14 @@ class KarooFish:
 
         black_screen_strikes = 0 
         
-        # === STATE VARIABLES ===
-        last_bar_seen_time = time.time()
-        last_cast_performed = 0
-        is_in_minigame = False # Track if we are actively playing
-        
-        # Initial Cast
+        # === THE STATE MACHINE ===
+        # States: "CASTING", "WAITING", "TRACKING", "COOLDOWN"
+        state = "CASTING"
+        state_timer = time.time()
+        last_bar_seen_time = 0
+
+        # Initial Auto Purchase
         if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
-        self.cast()
-        last_cast_performed = time.time()
 
         try:
             while self.fishing_active:
@@ -755,6 +753,7 @@ class KarooFish:
                 img_full = self.camera.get_latest_frame()
                 if img_full is None: time.sleep(0.01); continue
                 
+                # Black Screen Protection
                 if np.max(img_full) == 0:
                     black_screen_strikes += 1
                     if black_screen_strikes < 20: time.sleep(0.01); continue
@@ -765,13 +764,13 @@ class KarooFish:
                         black_screen_strikes = 0; continue
                 black_screen_strikes = 0
                 
-                # Notification Scan
+                # --- NOTIFICATION SCAN (Always Active) ---
                 full_h, full_w, _ = img_full.shape
                 notif_crop = img_full[0:int(full_h * 0.15), int(full_w * 0.3):int(full_w * 0.7)]
                 mask = (notif_crop[:,:,0] > 40) & (notif_crop[:,:,0] < 100) & (notif_crop[:,:,1] > 100) & (notif_crop[:,:,1] < 170) & (notif_crop[:,:,2] > 200)
                 if np.count_nonzero(mask) > 50: self.trigger_rare_catch_notification()
 
-                # Overlay Crop
+                # --- OVERLAY AREA ---
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 width, height = self.overlay_area['width'], self.overlay_area['height']
                 if y + height > img_full.shape[0] or x + width > img_full.shape[1]: img = img_full 
@@ -780,80 +779,85 @@ class KarooFish:
                 # --- BAR DETECTION ---
                 col_mask = np.any(np.all(img == target_color, axis=-1), axis=0)
                 col_indices = np.where(col_mask)[0]
+                bar_detected = len(col_indices) > 0
 
-                if len(col_indices) > 0:
-                    # === STATE: MINIGAME ACTIVE ===
-                    is_in_minigame = True
-                    last_bar_seen_time = time.time()
+                # === STATE LOGIC ===
+                
+                if state == "CASTING":
+                    # Perform Cast
+                    print("State: CASTING")
+                    self.cast()
+                    state = "WAITING"
+                    state_timer = time.time()
+                
+                elif state == "WAITING":
+                    # Look for bar. If found -> TRACKING.
+                    if bar_detected:
+                        print("Bar detected! Switching to TRACKING.")
+                        state = "TRACKING"
+                        state_timer = time.time() # Reset tracked timer
+                        last_bar_seen_time = time.time()
                     
-                    min_c, max_c = col_indices[0], col_indices[-1]
-                    bar_img = img[:, min_c:max_c+1]
-
-                    dark_mask = np.any(np.all(bar_img == dark_color, axis=-1), axis=1)
-                    dark_indices = np.where(dark_mask)[0]
-                    white_mask = np.any(np.all(bar_img == white_color, axis=-1), axis=1)
-                    white_indices = np.where(white_mask)[0]
-
-                    if len(white_indices) > 0 and len(dark_indices) > 0:
-                        white_center = np.mean(white_indices)
-                        dark_center = np.mean(dark_indices)
-                        raw_error = dark_center - white_center
-                        normalized_error = raw_error / height 
-                        derivative = normalized_error - self.previous_error
-                        self.previous_error = normalized_error
-                        pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
+                    # If timeout (25s) without seeing bar -> Retry Cast
+                    elif time.time() - state_timer > self.scan_timeout:
+                        print("Timeout (No bite). Retrying Cast.")
+                        state = "CASTING"
+                
+                elif state == "TRACKING":
+                    # Logic to play the minigame
+                    if bar_detected:
+                        last_bar_seen_time = time.time()
                         
-                        if pd_output > 0:
-                            if not self.is_clicking:
-                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                                self.is_clicking = True
-                        else:
-                            if self.is_clicking:
-                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                                self.is_clicking = False
-                else:
-                    # === STATE: NO BAR VISIBLE ===
-                    if self.is_clicking:
-                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                        self.is_clicking = False
-                    
-                    current_time = time.time()
-                    time_since_seen_bar = current_time - last_bar_seen_time
-                    time_since_last_cast = current_time - last_cast_performed
-                    
-                    # === RECAST DECISION LOGIC ===
-                    should_recast = False
-                    
-                    if is_in_minigame:
-                        # Case A: We WERE playing, but bar is gone.
-                        # Wait for "End Animation" (approx 2.5s)
-                        if time_since_seen_bar > 2.5:
-                            print("Minigame Finished. Recasting.")
-                            is_in_minigame = False
-                            should_recast = True
+                        min_c, max_c = col_indices[0], col_indices[-1]
+                        bar_img = img[:, min_c:max_c+1]
+
+                        dark_mask = np.any(np.all(bar_img == dark_color, axis=-1), axis=1)
+                        dark_indices = np.where(dark_mask)[0]
+                        white_mask = np.any(np.all(bar_img == white_color, axis=-1), axis=1)
+                        white_indices = np.where(white_mask)[0]
+
+                        if len(white_indices) > 0 and len(dark_indices) > 0:
+                            white_center = np.mean(white_indices)
+                            dark_center = np.mean(dark_indices)
+                            raw_error = dark_center - white_center
+                            normalized_error = raw_error / height 
+                            derivative = normalized_error - self.previous_error
+                            self.previous_error = normalized_error
+                            pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
+                            
+                            if pd_output > 0:
+                                if not self.is_clicking:
+                                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                                    self.is_clicking = True
+                            else:
+                                if self.is_clicking:
+                                    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                                    self.is_clicking = False
                     else:
-                        # Case B: We are waiting for a bite.
-                        # Wait long timeout (e.g. 25s) before giving up.
-                        # Also ensure we don't spam cast (must be > 4.5s since last cast)
-                        if time_since_last_cast > self.scan_timeout:
-                            print("Long timeout (No bite). Resetting.")
-                            should_recast = True
-                    
-                    if should_recast and time_since_last_cast > 4.5:
-                        # Perform Actions
-                        if self.auto_purchase_var.get():
-                            self.purchase_counter += 1
-                            if self.purchase_counter >= self.loops_var.get():
-                                self.perform_auto_purchase_sequence(); self.purchase_counter = 0
-                        if self.item_check_var.get(): self.perform_store_fruit()
-                        if self.auto_bait_var.get(): self.perform_bait_select()
+                        # Bar not visible (Momentarily or Finished)
+                        if self.is_clicking:
+                            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                            self.is_clicking = False
                         
-                        # CAST
-                        self.cast()
-                        last_cast_performed = time.time()
-                        last_bar_seen_time = time.time() # Prevent immediate double-trigger
+                        # If bar has been gone for > 2.5s, we assume game over
+                        if time.time() - last_bar_seen_time > 2.5:
+                            print("Minigame Finished. Going to COOLDOWN.")
+                            state = "COOLDOWN"
+                            
+                elif state == "COOLDOWN":
+                    # Perform post-game logic (Store/Bait/Stats)
+                    if self.auto_purchase_var.get():
+                        self.purchase_counter += 1
+                        if self.purchase_counter >= self.loops_var.get():
+                            self.perform_auto_purchase_sequence(); self.purchase_counter = 0
+                    if self.item_check_var.get(): self.perform_store_fruit()
+                    if self.auto_bait_var.get(): self.perform_bait_select()
                     
-                    time.sleep(0.01)
+                    # Loop back to start
+                    state = "CASTING"
+
+                # Short sleep to prevent CPU burn
+                time.sleep(0.01)
 
         except Exception as e: print(f"Error in fishing loop: {e}")
         finally:
