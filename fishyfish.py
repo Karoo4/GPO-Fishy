@@ -51,7 +51,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish - DXCam Stable")
+        self.root.title("Karoo Fish - DXCam Hybrid")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -76,6 +76,8 @@ class KarooFish:
         self.cached_notif_icon = None
         
         # --- CONFIG VARS ---
+        self.base_width = win32api.GetSystemMetrics(0)
+        self.base_height = win32api.GetSystemMetrics(1)
         self.resize_threshold = 10
         self.dragging = False
         self.resizing = False
@@ -87,13 +89,11 @@ class KarooFish:
         self.kp = 0.15 
         self.kd = 0.5
         self.previous_error = 0
-        self.scan_timeout = 30.0 
+        self.scan_timeout = 15.0 # Matched MSS
         self.wait_after_loss = 1.0
         
-        self.purchase_delay_after_key = 2.0   
-        self.purchase_click_delay = 0.8       
-        self.purchase_after_type_delay = 0.8
-        self.clean_step_delay = 1.0           
+        self.purchase_delay_after_key = 2.5
+        self.clean_step_delay = 1.5
         
         self.dpi_scale = self.get_dpi_scale()
         self.overlay_area = {
@@ -123,7 +123,6 @@ class KarooFish:
         
         self.root.bind_all("<Any-KeyPress>", self.reset_afk_timer)
         self.root.bind_all("<Any-ButtonPress>", self.reset_afk_timer)
-        self.root.bind_all("<Motion>", self.reset_afk_timer)
         self.check_auto_afk()
 
     # --- ASSET CACHING ---
@@ -167,7 +166,7 @@ class KarooFish:
                         idx = int(k)
                         self.point_coords[idx] = tuple(v)
                         if idx in self.point_labels:
-                            self.point_labels[idx].config(text=f"{v[0]},{v[1]}", fg="#00ff00")
+                            self.point_labels[idx].config(text=f"{int(v[0])},{int(v[1])}", fg="#00ff00")
             if "hotkeys" in data:
                 self.hotkeys.update(data["hotkeys"])
                 for k, v in self.hotkeys.items():
@@ -196,7 +195,7 @@ class KarooFish:
         try:
             with open(CONFIG_FILE, 'w') as f: json.dump(data, f, indent=4)
             self.status_msg.config(text="Settings Saved!", fg="#00ff00")
-        except: self.status_msg.config(text="Save Failed", fg="red")
+        except: pass
 
     def reset_defaults(self):
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
@@ -379,7 +378,7 @@ class KarooFish:
         self.loops_var = tk.IntVar(value=10)
         self.create_input(frame, "Loops/Buy:", self.loops_var)
         tk.Label(frame, text="Coordinates:", font=FONT_BOLD, bg=THEME_BG, fg="white").pack(anchor="w", padx=20, pady=(10, 5))
-        plabs = {1: "Pt 1 (Yes)", 2: "Pt 2 (Input)", 3: "Pt 3 (No)", 4: "Pt 4 (Ocean)"}
+        plabs = {1: "Pt 1 (Yes)", 2: "Pt 2 (Input)", 3: "Pt 3 (No / Exit)", 4: "Pt 4 (Ocean)"}
         for i in range(1, 5): self.create_point_row(frame, i, plabs[i])
         self.create_section(frame, "Auto Store Fruit")
         self.item_check_var = tk.BooleanVar(value=True)
@@ -629,72 +628,89 @@ class KarooFish:
             win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0); time.sleep(0.05)
         except Exception: pass
 
-    def click(self, pt, debug_name="Target", hold_time=0.1):
+    def click(self, pt, debug_name="Target", hold_time=0.25):
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
             win32api.SetCursorPos((x, y)); time.sleep(0.02)
             win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0); time.sleep(0.05)
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            time.sleep(hold_time) 
+            actual_hold = max(hold_time, self.rdp_click_hold)
+            time.sleep(actual_hold) 
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0); time.sleep(0.05)
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
     # --- ACTIONS (FISHING) ---
+    def get_pixel_color_at_pt(self, sct, pt):
+        """Helper for auto-purchase verification (Using MSS for simple point check)"""
+        scaled = self.get_scaled_point(pt)
+        if not scaled: return (0,0,0)
+        monitor = {"top": scaled[1], "left": scaled[0], "width": 1, "height": 1}
+        img = np.array(sct.grab(monitor))
+        return (img[0,0,0], img[0,0,1], img[0,0,2]) # B, G, R
+
     def perform_auto_purchase_sequence(self):
+        """
+        RDP-Optimized Auto Purchase with improved logic to stop looping inputs.
+        """
         try:
             self.is_performing_action = True 
-            if not all([self.point_coords[1], self.point_coords[2], self.point_coords[4]]): return
+            if not all([self.point_coords[1], self.point_coords[2], self.point_coords[3], self.point_coords[4]]): return
             
-            keyboard.press_and_release('e'); time.sleep(self.purchase_delay_after_key)
-            self.click(self.point_coords[1], "Pt 1 (Yes)"); time.sleep(self.purchase_click_delay)
-            self.click(self.point_coords[2], "Pt 2 (Input)"); time.sleep(self.purchase_click_delay)
-            keyboard.write(str(self.amount_var.get())); time.sleep(self.purchase_after_type_delay)
-            self.click(self.point_coords[1], "Pt 1 (Confirm)"); time.sleep(self.purchase_click_delay)
-            self.click(self.point_coords[2], "Pt 2 (Safety)"); time.sleep(self.purchase_click_delay)
-            self.move_to(self.point_coords[4]); time.sleep(self.purchase_click_delay)
-
-            if self.point_coords[3]:
-                frame = None
-                if self.camera and self.camera.is_capturing: frame = self.camera.get_latest_frame()
-                else:
-                    tmp_cam = dxcam.create(output_color="BGR"); frame = tmp_cam.grab(); del tmp_cam
-
-                if frame is not None:
-                    p3 = self.point_coords[3]
-                    cx, cy = int(p3[0]), int(p3[1])
-                    if cy < frame.shape[0] and cx < frame.shape[1]:
-                        b, g, r = frame[cy, cx]
-                        if r > 200 and g < 50 and b < 50:
-                            self.click(p3, "Pt 3 (Force Close)"); time.sleep(0.5)
-                            self.click(self.point_coords[2], "Pt 2 (Post-Close Safety)"); time.sleep(0.5)
-                            self.move_to(self.point_coords[4])
+            print("Starting Auto Purchase...")
+            
+            # Standard sequence
+            keyboard.press('e'); time.sleep(0.3); keyboard.release('e')
+            time.sleep(self.purchase_delay_after_key) 
+            self.click(self.point_coords[1], "Pt 1 (Yes)", hold_time=0.35); time.sleep(1.5) 
+            self.click(self.point_coords[2], "Pt 2 (Input)", hold_time=0.35); time.sleep(1.5)
+            
+            amount_str = str(self.amount_var.get())
+            for char in amount_str: keyboard.write(char); time.sleep(0.2)
+            time.sleep(1.0)
+            
+            self.click(self.point_coords[1], "Pt 1 (Confirm)", hold_time=0.35)
+            time.sleep(2.0) 
+            
+            # --- FIX: ROBUST EXIT LOOP ---
+            # Instead of relying purely on color change (which can lag on RDP), 
+            # we also limit the loop and use the camera if available.
+            print("Entering Menu Exit Safety Loop...")
+            
+            sct = mss.mss()
+            target_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
+            
+            safety_strikes = 0
+            while safety_strikes < 10: # Limit to 10 tries
+                self.click(self.point_coords[3], "Pt 3 (Exit Failsafe)", hold_time=0.35); time.sleep(0.5)
+                self.click(self.point_coords[2], "Pt 2 (Input - Safety)", hold_time=0.35); time.sleep(1.0)
+                
+                current_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
+                diff = sum(abs(c - t) for c, t in zip(current_bgr, target_bgr))
+                
+                if diff > 50: 
+                    print("Menu closed (Color changed).")
+                    break
+                else: 
+                    safety_strikes += 1
+            
+            self.move_to(self.point_coords[4]); time.sleep(1.0)
+            
         except Exception as e: print(f"Auto Purchase Error: {e}")
         finally: self.is_performing_action = False
 
     def perform_store_fruit(self):
-        p5, p7 = self.point_coords.get(5), self.point_coords.get(7)
-        if not p5 or not p7: return
-        def is_white_icon_visible():
-            img = self.camera.get_latest_frame()
-            if img is None: return False
-            cx, cy = int(p7[0]), int(p7[1])
-            if cy >= img.shape[0] or cx >= img.shape[1]: return False
-            b, g, r = img[cy, cx]
-            return (r > 200 and g > 200 and b > 200)
         try:
             self.is_performing_action = True 
-            keyboard.press_and_release('2'); time.sleep(0.5)
-            keyboard.press_and_release('3'); time.sleep(self.clean_step_delay)
-            if is_white_icon_visible():
+            keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
+            keyboard.press('3'); time.sleep(0.25); keyboard.release('3')
+            time.sleep(self.clean_step_delay)
+            if self.point_coords.get(5):
                 for i in range(3):
-                    self.click(p5, f"Store Click {i+1}"); time.sleep(0.8)
-                    if not is_white_icon_visible(): break
-                if is_white_icon_visible():
-                    keyboard.press_and_release('backspace'); time.sleep(1.0)
-            keyboard.press_and_release('2'); time.sleep(0.5)
-            self.move_to(self.point_coords[4]); time.sleep(0.2)
-        except Exception: keyboard.press_and_release('2')
+                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.35); time.sleep(0.8)
+            keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
+            self.move_to(self.point_coords[4]); time.sleep(0.5)
+        except: keyboard.press_and_release('2')
         finally: self.is_performing_action = False
 
     def perform_bait_select(self):
@@ -703,15 +719,16 @@ class KarooFish:
         if not p6: return
         try:
             self.is_performing_action = True 
-            self.click(p6, "Pt 6 (Bait Select)"); time.sleep(0.5) 
-            self.move_to(self.point_coords[4]); time.sleep(0.2)
-        except Exception: pass
+            self.click(p6, "Pt 6 (Bait Select)", hold_time=0.35); time.sleep(0.8)
+            self.move_to(self.point_coords[4]); time.sleep(0.5)
+        except: pass
         finally: self.is_performing_action = False
 
     def cast(self):
         if self.is_performing_action: return 
-        # Just click once
-        self.click(self.point_coords[4], "Cast (Initial)", hold_time=0.1)
+        self.move_to(self.point_coords[4])
+        time.sleep(0.5)
+        self.click(self.point_coords[4], "Cast (RDP Safe)", hold_time=1.9)
         self.is_clicking = False
         self.session_loops += 1
         
@@ -720,20 +737,18 @@ class KarooFish:
              current_total = self.stats['total_caught'] + self.session_loops
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
         self.previous_error = 0
+        time.sleep(2.5) 
 
-    # --- LOOPS (STABLE RE-CAST FIX) ---
+    # --- HYBRID ENGINE: DXCAM CAPTURE + MSS LOGIC ---
     def run_fishing_loop(self):
-        print("Fishing Loop Started (Stable)")
+        print("Fishing Loop Started (Hybrid: DXCam Engine + MSS Logic)")
         
-        # Color & Tolerance Config
-        # BGR Target: [255, 170, 85]
-        # Tolerance +/- 25
-        lower_bound = np.array([230, 145, 60], dtype=np.uint8)
-        upper_bound = np.array([255, 195, 110], dtype=np.uint8)
-        
+        # BGR Colors (DXCam returns BGRA/BGR)
+        target_color = np.array([0xff, 0xaa, 0x55], dtype=np.uint8) # BGR
         dark_color = np.array([0x19, 0x19, 0x19], dtype=np.uint8)
         white_color = np.array([0xff, 0xff, 0xff], dtype=np.uint8)
-
+        
+        # Lazy Load Camera
         if self.camera is None: 
             try: self.camera = dxcam.create(output_color="BGR")
             except: pass
@@ -742,25 +757,22 @@ class KarooFish:
 
         black_screen_strikes = 0 
         
-        # Debounce Counters
-        consecutive_detections = 0
-        consecutive_losses = 0
-        
-        # Flags
-        was_detecting = False
-        last_detection_time = time.time() # Last time we SAW the bar
-        
         # Initial Cast
         if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
         self.cast()
+        
+        # Logic Flags (Exact copy of MSS Logic)
+        last_detection_time = time.time()
+        was_detecting = False
 
         try:
             while self.fishing_active:
-                if self.is_performing_action: time.sleep(0.1); continue
+                if self.is_performing_action: time.sleep(0.2); continue
 
+                # 1. Grab Image (DXCam - Fast)
                 img_full = self.camera.get_latest_frame()
                 if img_full is None: time.sleep(0.01); continue
-                
+
                 if np.max(img_full) == 0:
                     black_screen_strikes += 1
                     if black_screen_strikes < 20: time.sleep(0.01); continue
@@ -770,85 +782,36 @@ class KarooFish:
                         self.camera = dxcam.create(output_color="BGR"); self.camera.start(target_fps=60, video_mode=True)
                         black_screen_strikes = 0; continue
                 black_screen_strikes = 0
-                
-                # --- NOTIFICATION SCAN (Always Active) ---
-                full_h, full_w, _ = img_full.shape
-                notif_crop = img_full[0:int(full_h * 0.15), int(full_w * 0.3):int(full_w * 0.7)]
-                mask = (notif_crop[:,:,0] > 40) & (notif_crop[:,:,0] < 100) & (notif_crop[:,:,1] > 100) & (notif_crop[:,:,1] < 170) & (notif_crop[:,:,2] > 200)
-                if np.count_nonzero(mask) > 50: self.trigger_rare_catch_notification()
 
-                # --- OVERLAY AREA ---
-                x, y = self.overlay_area['x'], self.overlay_area['y']
-                width, height = self.overlay_area['width'], self.overlay_area['height']
-                if y + height > img_full.shape[0] or x + width > img_full.shape[1]: img = img_full 
-                else: img = img_full[y:y+height, x:x+width]
+                # 2. Scaling & Overlay Area
+                curr_w = win32api.GetSystemMetrics(0)
+                curr_h = win32api.GetSystemMetrics(1)
+                scale_x = curr_w / self.base_width
+                scale_y = curr_h / self.base_height
+                
+                ox = int(self.overlay_area['x'] * scale_x)
+                oy = int(self.overlay_area['y'] * scale_y)
+                ow = int(self.overlay_area['width'] * scale_x)
+                oh = int(self.overlay_area['height'] * scale_y)
+                
+                if oy + oh > img_full.shape[0] or ox + ow > img_full.shape[1]: img = img_full 
+                else: img = img_full[oy:oy+oh, ox:ox+ow]
 
-                # --- STABLE BAR DETECTION ---
-                # Check for pixels within range
-                # axis=-1 means check R,G,B channels. axis=0 means check columns.
-                mask_bar = np.all((img >= lower_bound) & (img <= upper_bound), axis=-1)
-                col_indices = np.where(np.any(mask_bar, axis=0))[0]
+                # 3. Detection (NumPy - Fast)
+                # Check for Bar (Blue Border)
+                # Use Masking instead of loops
+                col_mask = np.any(np.all(img == target_color, axis=-1), axis=0)
+                col_indices = np.where(col_mask)[0]
                 
-                current_frame_has_bar = len(col_indices) > 0
-                
-                # Debounce Logic
-                if current_frame_has_bar:
-                    consecutive_detections += 1
-                    consecutive_losses = 0
-                else:
-                    consecutive_losses += 1
-                    consecutive_detections = 0
-                
-                # We need 5 consecutive frames to "Confirm" bar presence
-                is_bar_confirmed = (consecutive_detections > 5)
-                # We need 10 consecutive frames to "Confirm" bar loss
-                is_bar_lost_confirmed = (consecutive_losses > 10)
+                found_first = len(col_indices) > 0
 
-                # === LOGIC FLOW ===
-                
-                if is_bar_confirmed:
-                    # WE ARE PLAYING
-                    was_detecting = True
-                    last_detection_time = time.time()
-                    
-                    min_c, max_c = col_indices[0], col_indices[-1]
-                    bar_img = img[:, min_c:max_c+1]
-
-                    dark_mask = np.any(np.all(bar_img == dark_color, axis=-1), axis=1)
-                    dark_indices = np.where(dark_mask)[0]
-                    white_mask = np.any(np.all(bar_img == white_color, axis=-1), axis=1)
-                    white_indices = np.where(white_mask)[0]
-
-                    if len(white_indices) > 0 and len(dark_indices) > 0:
-                        white_center = np.mean(white_indices)
-                        dark_center = np.mean(dark_indices)
-                        raw_error = dark_center - white_center
-                        normalized_error = raw_error / height 
-                        derivative = normalized_error - self.previous_error
-                        self.previous_error = normalized_error
-                        pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
-                        
-                        if pd_output > 0:
-                            if not self.is_clicking:
-                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                                self.is_clicking = True
-                        else:
-                            if self.is_clicking:
-                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                                self.is_clicking = False
-                
-                elif is_bar_lost_confirmed:
-                    # WE ARE NOT PLAYING (Idle or Waiting)
-                    if self.is_clicking:
-                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                        self.is_clicking = False
-                    
+                # === LOGIC FROM MSS SCRIPT STARTS HERE ===
+                if not found_first:
                     current_time = time.time()
-                    
-                    # Case A: We WERE playing, and now we stopped. (Game Over)
-                    if was_detecting:
-                        print("Game Over. Recasting.")
+                    if was_detecting: # Game was running, now it's not -> Fish Caught
                         was_detecting = False
+                        self.is_clicking = False
+                        win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
@@ -859,64 +822,85 @@ class KarooFish:
                         
                         self.cast()
                         last_detection_time = time.time()
-                    
-                    # Case B: We have been waiting too long without seeing the bar (No bite).
-                    elif current_time - last_detection_time > self.scan_timeout:
-                        print("Timeout waiting for bite. Recasting.")
+                        
+                    elif current_time - last_detection_time > self.scan_timeout: # Timeout
                         if self.item_check_var.get(): self.perform_store_fruit()
+                        if self.auto_bait_var.get(): self.perform_bait_select()
                         
                         self.cast()
                         last_detection_time = time.time()
-                        
-                    # Case C: Just waiting. Do nothing.
-                    time.sleep(0.01)
+                    
+                    time.sleep(0.01) # Short wait scanning
+                    continue
+
+                # Bar Found -> Play the Game
+                min_c, max_c = col_indices[0], col_indices[-1]
+                bar_img = img[:, min_c:max_c+1]
+                
+                dark_mask = np.any(np.all(bar_img == dark_color, axis=-1), axis=1)
+                dark_indices = np.where(dark_mask)[0]
+                
+                white_mask = np.any(np.all(bar_img == white_color, axis=-1), axis=1)
+                white_indices = np.where(white_mask)[0]
+
+                if len(white_indices) > 0 and len(dark_indices) > 0:
+                    was_detecting = True
+                    last_detection_time = time.time()
+                    
+                    white_center = np.mean(white_indices)
+                    dark_center = np.mean(dark_indices)
+                    
+                    raw_error = dark_center - white_center
+                    normalized_error = raw_error / oh # Normalized by overlay height
+                    
+                    derivative = normalized_error - self.previous_error
+                    self.previous_error = normalized_error
+                    pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
+                    
+                    time_since_cast = time.time() - self.last_cast_time
+                    if pd_output > 0:
+                        if time_since_cast > 3.0: 
+                            if not self.is_clicking:
+                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                                self.is_clicking = True
+                    else:
+                        if self.is_clicking:
+                            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                            self.is_clicking = False
+                # === LOGIC ENDS HERE ===
+                
+                # No Sleep here for max speed
 
         except Exception as e: print(f"Error in fishing loop: {e}")
         finally:
-            if self.camera: self.camera.stop()
-            if self.is_clicking:
-                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                self.is_clicking = False
+            if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+            self.is_clicking = False
             self.save_config()
 
     def run_reroll_loop(self):
-        print("Reroll Loop Started")
-        if self.camera is None: 
-            try: self.camera = dxcam.create(output_color="BGR")
-            except: pass
-        if self.camera and not self.camera.is_capturing: 
-            self.camera.start(target_fps=30, video_mode=True)
-        black_screen_strikes = 0
+        print("Reroll Loop Started (Hybrid)")
+        sct = mss.mss() # Use MSS for simple pixel checks (Reliable)
         try:
             p8 = self.point_coords.get(8)
-            cx, cy = int(p8[0]), int(p8[1])
             while self.reroll_active:
-                img = self.camera.get_latest_frame()
-                if img is None: time.sleep(0.01); continue
-                if np.max(img) == 0:
-                    black_screen_strikes += 1
-                    if black_screen_strikes < 20: time.sleep(0.01); continue
-                    else:
-                        try: self.camera.stop()
-                        except: pass
-                        del self.camera; self.camera = None; time.sleep(1.0)
-                        self.camera = dxcam.create(output_color="BGR")
-                        self.camera.start(target_fps=30, video_mode=True)
-                        black_screen_strikes = 0; continue
-                black_screen_strikes = 0
+                try:
+                    sct_img = sct.grab(sct.monitors[1])
+                    img = np.array(sct_img)[:, :, :3]
+                except: time.sleep(0.1); continue
+                
+                if np.max(img) == 0: time.sleep(1.0); continue
+                
+                scaled_pt = self.get_scaled_point(p8)
+                cx, cy = int(scaled_pt[0]), int(scaled_pt[1])
                 
                 if cy < img.shape[0] and cx < img.shape[1]:
                     b, g, r = img[cy, cx]
                     if (abs(r - 179) < 35) and (abs(g - 122) < 35) and (abs(b - 0) < 35):
-                        print("Reroll Button Detected. Clicking.")
                         self.click(p8, "Reroll"); time.sleep(0.2)
                 time.sleep(0.1)
         except Exception as e: print(f"Error in reroll loop: {e}")
-        finally:
-            if self.camera: self.camera.stop()
-            self.save_config()
+        finally: self.save_config()
 
-    # --- OVERLAY ---
     def toggle_overlay(self):
         self.overlay_active = not self.overlay_active
         if self.overlay_active:
