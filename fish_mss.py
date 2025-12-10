@@ -92,7 +92,7 @@ class KarooFish:
         
         self.purchase_counter = 0      
         self.session_loops = 0        
-        self.kp = 0.15 # Slightly higher default for faster response
+        self.kp = 0.15 
         self.kd = 0.5
         self.previous_error = 0
         self.scan_timeout = 15.0
@@ -750,8 +750,8 @@ class KarooFish:
                     self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.35)
                     time.sleep(0.8)
             
-            # --- UPDATED EXIT SEQUENCE ---
-            # Press Backspace to close menu as requested
+            # --- BACKSPACE EXIT ---
+            # Press Backspace after trying to click 3 times
             time.sleep(0.5)
             keyboard.press('backspace'); time.sleep(0.2); keyboard.release('backspace')
             
@@ -760,7 +760,6 @@ class KarooFish:
             
         except Exception as e: 
             print(f"Store Error: {e}")
-            # Failsafe: Try to close with Backspace if error occurs
             keyboard.press('backspace'); time.sleep(0.2); keyboard.release('backspace')
         finally: 
             self.is_performing_action = False
