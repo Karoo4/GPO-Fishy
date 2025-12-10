@@ -1,4 +1,4 @@
-name: Build DXCam Version
+name: Build Karoo Fish Versions
 on: [push]
 jobs:
   build:
@@ -11,20 +11,34 @@ jobs:
           python-version: '3.10'
 
       # STEP 1: Install Dependencies
+      # We install dependencies for BOTH versions here.
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          # ADDED: mss is now required for the hybrid logic
-          pip install dxcam numpy keyboard pynput pywin32 Pillow requests mss
+          pip install numpy keyboard pynput pywin32 Pillow requests mss dxcam
 
-      # STEP 2: Build
-      # --collect-all dxcam is required. mss usually bundles fine without extra args.
-      - name: Build with PyInstaller
-        run: pyinstaller --onefile --noconsole --uac-admin --collect-all dxcam --name KarooFishDX fishyfish.py
+      # STEP 2: Build MSS Version
+      # Assuming you saved the MSS code as 'fish_mss.py'
+      - name: Build MSS Version
+        run: |
+          pyinstaller --onefile --noconsole --uac-admin --name Karoo_Fish_MSS_Stable fish_mss.py
 
-      # STEP 3: Upload
+      # STEP 3: Build DXCam Version
+      # Assuming you saved the DXCam code as 'fish_dx.py'
+      # Note: --collect-all dxcam is critical for the DX version
+      - name: Build DXCam Version
+        run: |
+          pyinstaller --onefile --noconsole --uac-admin --collect-all dxcam --name Karoo_Fish_DX_Stable fish_dx.py
+
+      # STEP 4: Upload MSS Artifact
       - uses: actions/upload-artifact@v4
         with:
-          name: Karoo_Fish_DX  # This is the name of the zip file on GitHub
-          path: dist/KarooFishDX.exe
+          name: Karoo_Fish_MSS_Stable
+          path: dist/Karoo_Fish_MSS_Stable.exe
+
+      # STEP 5: Upload DXCam Artifact
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Karoo_Fish_DX_Stable
+          path: dist/Karoo_Fish_DX_Stable.exe
