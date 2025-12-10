@@ -51,7 +51,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish - Reactive")
+        self.root.title("Karoo Fish - Smart Wait")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -87,7 +87,7 @@ class KarooFish:
         self.kp = 0.15 
         self.kd = 0.5
         self.previous_error = 0
-        self.scan_timeout = 15.0
+        self.scan_timeout = 25.0 # Increased to 25s for "Wait for Bite"
         self.wait_after_loss = 1.0
         
         self.purchase_delay_after_key = 2.0   
@@ -710,7 +710,8 @@ class KarooFish:
 
     def cast(self):
         if self.is_performing_action: return 
-        self.click(self.point_coords[4], "Cast (Immediate)", hold_time=0.1) # Fast Cast
+        # Short hold time for instant cast reaction
+        self.click(self.point_coords[4], "Cast (Immediate)", hold_time=0.1)
         self.is_clicking = False
         self.session_loops += 1
         
@@ -719,17 +720,16 @@ class KarooFish:
              current_total = self.stats['total_caught'] + self.session_loops
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
         self.previous_error = 0
-        # REMOVED sleep here to rely on the loop's timer
+        # No Sleep here: Return control to main loop immediately
 
-    # --- LOOPS (REACTIVE STATE MACHINE) ---
+    # --- LOOPS (STATE MACHINE) ---
     def run_fishing_loop(self):
-        print("Fishing Loop Started (Reactive)")
+        print("Fishing Loop Started (Reactive State Machine)")
         
         target_color = np.array([0xff, 0xaa, 0x55], dtype=np.uint8) # BGR
         dark_color = np.array([0x19, 0x19, 0x19], dtype=np.uint8)
         white_color = np.array([0xff, 0xff, 0xff], dtype=np.uint8)
 
-        # Lazy Load Camera
         if self.camera is None: 
             try: self.camera = dxcam.create(output_color="BGR")
             except: pass
@@ -738,9 +738,10 @@ class KarooFish:
 
         black_screen_strikes = 0 
         
-        # State Variables
+        # === STATE VARIABLES ===
         last_bar_seen_time = time.time()
         last_cast_performed = 0
+        is_in_minigame = False # Track if we are actively playing
         
         # Initial Cast
         if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
@@ -754,7 +755,6 @@ class KarooFish:
                 img_full = self.camera.get_latest_frame()
                 if img_full is None: time.sleep(0.01); continue
                 
-                # Black Screen Protection
                 if np.max(img_full) == 0:
                     black_screen_strikes += 1
                     if black_screen_strikes < 20: time.sleep(0.01); continue
@@ -765,13 +765,13 @@ class KarooFish:
                         black_screen_strikes = 0; continue
                 black_screen_strikes = 0
                 
-                # --- NOTIFICATION SCAN ---
+                # Notification Scan
                 full_h, full_w, _ = img_full.shape
                 notif_crop = img_full[0:int(full_h * 0.15), int(full_w * 0.3):int(full_w * 0.7)]
                 mask = (notif_crop[:,:,0] > 40) & (notif_crop[:,:,0] < 100) & (notif_crop[:,:,1] > 100) & (notif_crop[:,:,1] < 170) & (notif_crop[:,:,2] > 200)
                 if np.count_nonzero(mask) > 50: self.trigger_rare_catch_notification()
 
-                # --- OVERLAY AREA ---
+                # Overlay Crop
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 width, height = self.overlay_area['width'], self.overlay_area['height']
                 if y + height > img_full.shape[0] or x + width > img_full.shape[1]: img = img_full 
@@ -782,8 +782,9 @@ class KarooFish:
                 col_indices = np.where(col_mask)[0]
 
                 if len(col_indices) > 0:
-                    # === BAR VISIBLE: PLAY GAME ===
-                    last_bar_seen_time = time.time() # Reset AFK/Recast timer
+                    # === STATE: MINIGAME ACTIVE ===
+                    is_in_minigame = True
+                    last_bar_seen_time = time.time()
                     
                     min_c, max_c = col_indices[0], col_indices[-1]
                     bar_img = img[:, min_c:max_c+1]
@@ -796,10 +797,8 @@ class KarooFish:
                     if len(white_indices) > 0 and len(dark_indices) > 0:
                         white_center = np.mean(white_indices)
                         dark_center = np.mean(dark_indices)
-                        
                         raw_error = dark_center - white_center
                         normalized_error = raw_error / height 
-                        
                         derivative = normalized_error - self.previous_error
                         self.previous_error = normalized_error
                         pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
@@ -813,25 +812,35 @@ class KarooFish:
                                 win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                                 self.is_clicking = False
                 else:
-                    # === NO BAR: IDLE / RECAST LOGIC ===
+                    # === STATE: NO BAR VISIBLE ===
                     if self.is_clicking:
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         self.is_clicking = False
                     
-                    # Check timers
                     current_time = time.time()
                     time_since_seen_bar = current_time - last_bar_seen_time
                     time_since_last_cast = current_time - last_cast_performed
                     
-                    # Logic:
-                    # 1. We haven't seen a bar for > 2.5 seconds (Game ended or we are waiting)
-                    # 2. We haven't cast in > 4.5 seconds (Cooldown between clicks)
-                    # 3. This combination ensures we assume the catch is done, and triggers a new cast.
+                    # === RECAST DECISION LOGIC ===
+                    should_recast = False
                     
-                    if time_since_seen_bar > 2.5 and time_since_last_cast > 4.5:
-                        print("Catch assumed complete. Recasting.")
-                        
-                        # Run post-catch tasks first
+                    if is_in_minigame:
+                        # Case A: We WERE playing, but bar is gone.
+                        # Wait for "End Animation" (approx 2.5s)
+                        if time_since_seen_bar > 2.5:
+                            print("Minigame Finished. Recasting.")
+                            is_in_minigame = False
+                            should_recast = True
+                    else:
+                        # Case B: We are waiting for a bite.
+                        # Wait long timeout (e.g. 25s) before giving up.
+                        # Also ensure we don't spam cast (must be > 4.5s since last cast)
+                        if time_since_last_cast > self.scan_timeout:
+                            print("Long timeout (No bite). Resetting.")
+                            should_recast = True
+                    
+                    if should_recast and time_since_last_cast > 4.5:
+                        # Perform Actions
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
@@ -842,8 +851,9 @@ class KarooFish:
                         # CAST
                         self.cast()
                         last_cast_performed = time.time()
+                        last_bar_seen_time = time.time() # Prevent immediate double-trigger
                     
-                    time.sleep(0.01) # Short sleep to save CPU when idle
+                    time.sleep(0.01)
 
         except Exception as e: print(f"Error in fishing loop: {e}")
         finally:
