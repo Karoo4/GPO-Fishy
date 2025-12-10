@@ -1,4 +1,4 @@
-name: Build EXE
+name: Build DXCam Version
 on: [push]
 jobs:
   build:
@@ -11,20 +11,20 @@ jobs:
           python-version: '3.10'
 
       # STEP 1: Install Dependencies
-      # REMOVED: dxcam
-      # KEPT: mss, numpy (essential for image processing), and system libs
+      # CHANGED: Swapped 'mss' for 'dxcam' to match your new script
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install mss numpy keyboard pynput pywin32 Pillow requests
+          pip install dxcam numpy keyboard pynput pywin32 Pillow requests
 
       # STEP 2: Build
-      # REMOVED: --collect-all dxcam (not needed for mss)
+      # ADDED: --collect-all dxcam 
+      # This ensures all internal DXCam components are bundled inside the .exe
       - name: Build with PyInstaller
-        run: pyinstaller --onefile --noconsole --uac-admin --name KarooFarm fishyfish.py
+        run: pyinstaller --onefile --noconsole --uac-admin --collect-all dxcam --name KarooFish_DXCam fishyfish.py
 
       - uses: actions/upload-artifact@v4
         with:
-          name: KarooFarm.exe
-          path: dist/KarooFarm.exe
+          name: KarooFish_DXCam.exe
+          path: dist/KarooFish_DXCam.exe
