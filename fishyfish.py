@@ -38,10 +38,10 @@ FONT_BOLD = ("Segoe UI", 11, "bold")
 FONT_TITLE = ("Segoe UI", 20, "bold")
 
 # RESOURCES
-VIVI_URL = "https://static0.srcdn.com/wordpress/wp-content/uploads/2023/10/vivi.jpg?q=49&fit=crop&w=825&dpr=2"
-DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2FX8YUuU7OpOA%2Fmaxresdefault.jpg&f=1&nofb=1&ipt=6d669298669fff2e4f438b54453c1f59c1655ca19fa2407ea1c42e471a4d7ab6"
 TITLE_LOGO_URL = "https://image2url.com/images/1765149562249-ff56b103-b5ea-4402-a896-0ed38202b804.png"
 PROFILE_ICON_URL = "https://i.pinimg.com/736x/f1/bb/3d/f1bb3d7b7b2fe3dbf46915f380043be9.jpg"
+VIVI_URL = "https://static0.srcdn.com/wordpress/wp-content/uploads/2023/10/vivi.jpg?q=49&fit=crop&w=825&dpr=2"
+DUCK_URL = "https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fi.ytimg.com%2Fvi%2FX8YUuU7OpOA%2Fmaxresdefault.jpg&f=1&nofb=1&ipt=6d669298669fff2e4f438b54453c1f59c1655ca19fa2407ea1c42e471a4d7ab6"
 NOTIF_AUDIO_URL = "https://www.dropbox.com/scl/fi/u9563mn42ay8rkgm33aod/igoronly.mp3?rlkey=vsqye9u2227x4c36og1myc8eb&st=3pdh75ks&dl=1"
 NOTIF_ICON_URL = "https://media.discordapp.net/attachments/776428933603786772/1447747919246528543/IMG_8252.png?ex=6938bfd1&is=69376e51&hm=ab1926f5459273c16aa1c6498ea96d74ae15b08755ed930a1b5bf615ffc0c31b&=&format=webp&quality=lossless&width=1214&height=1192"
 
@@ -51,7 +51,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish - DXCam Speed")
+        self.root.title("Karoo Fish - Reactive")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -84,7 +84,7 @@ class KarooFish:
         
         self.purchase_counter = 0     
         self.session_loops = 0        
-        self.kp = 0.15 # Higher KP for DXCam speed
+        self.kp = 0.15 
         self.kd = 0.5
         self.previous_error = 0
         self.scan_timeout = 15.0
@@ -710,19 +710,21 @@ class KarooFish:
 
     def cast(self):
         if self.is_performing_action: return 
-        self.click(self.point_coords[4], "Cast (Long)", hold_time=1.0)
-        self.is_clicking = False; self.session_loops += 1; self.last_cast_time = time.time()
+        self.click(self.point_coords[4], "Cast (Immediate)", hold_time=0.1) # Fast Cast
+        self.is_clicking = False
+        self.session_loops += 1
+        
         if self.afk_mode_active:
              self.root.after(0, lambda: self.afk_session_label.config(text=str(self.session_loops)))
              current_total = self.stats['total_caught'] + self.session_loops
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
-        self.previous_error = 0; time.sleep(0.5)
+        self.previous_error = 0
+        # REMOVED sleep here to rely on the loop's timer
 
-    # --- LOOPS (VECTORIZED) ---
+    # --- LOOPS (REACTIVE STATE MACHINE) ---
     def run_fishing_loop(self):
-        print("Fishing Loop Started (DXCam + NumPy Accelerated)")
+        print("Fishing Loop Started (Reactive)")
         
-        # BGR Colors for DXCam
         target_color = np.array([0xff, 0xaa, 0x55], dtype=np.uint8) # BGR
         dark_color = np.array([0x19, 0x19, 0x19], dtype=np.uint8)
         white_color = np.array([0xff, 0xff, 0xff], dtype=np.uint8)
@@ -735,122 +737,113 @@ class KarooFish:
             self.camera.start(target_fps=60, video_mode=True)
 
         black_screen_strikes = 0 
+        
+        # State Variables
+        last_bar_seen_time = time.time()
+        last_cast_performed = 0
+        
+        # Initial Cast
+        if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
+        self.cast()
+        last_cast_performed = time.time()
 
         try:
-            if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
-            self.cast()
-            last_detection_time = time.time()
-            was_detecting = False
-
             while self.fishing_active:
                 if self.is_performing_action: time.sleep(0.1); continue
 
                 img_full = self.camera.get_latest_frame()
                 if img_full is None: time.sleep(0.01); continue
                 
-                # --- TRANSIENT BLACK SCREEN FIX ---
+                # Black Screen Protection
                 if np.max(img_full) == 0:
                     black_screen_strikes += 1
                     if black_screen_strikes < 20: time.sleep(0.01); continue
                     else:
-                        print("Persistent Black Screen detected. Resetting Camera...")
-                        try: self.camera.stop()
+                        try: self.camera.stop(); del self.camera; self.camera = None; time.sleep(1.0)
                         except: pass
-                        del self.camera; self.camera = None; time.sleep(1.0)
-                        self.camera = dxcam.create(output_color="BGR")
-                        self.camera.start(target_fps=60, video_mode=True)
+                        self.camera = dxcam.create(output_color="BGR"); self.camera.start(target_fps=60, video_mode=True)
                         black_screen_strikes = 0; continue
                 black_screen_strikes = 0
                 
-                # --- NOTIFICATION DETECTION (Simplified Masking) ---
+                # --- NOTIFICATION SCAN ---
                 full_h, full_w, _ = img_full.shape
                 notif_crop = img_full[0:int(full_h * 0.15), int(full_w * 0.3):int(full_w * 0.7)]
-                # BGR check for Orange
-                mask = (notif_crop[:,:,0] > 40) & (notif_crop[:,:,0] < 100) & \
-                       (notif_crop[:,:,1] > 100) & (notif_crop[:,:,1] < 170) & \
-                       (notif_crop[:,:,2] > 200)
+                mask = (notif_crop[:,:,0] > 40) & (notif_crop[:,:,0] < 100) & (notif_crop[:,:,1] > 100) & (notif_crop[:,:,1] < 170) & (notif_crop[:,:,2] > 200)
                 if np.count_nonzero(mask) > 50: self.trigger_rare_catch_notification()
 
-                # --- OVERLAY AREA PROCESSING ---
+                # --- OVERLAY AREA ---
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 width, height = self.overlay_area['width'], self.overlay_area['height']
-                
                 if y + height > img_full.shape[0] or x + width > img_full.shape[1]: img = img_full 
                 else: img = img_full[y:y+height, x:x+width]
 
-                # --- VECTORIZED DETECTION ---
-                # Find columns containing the Blue Bar Border
-                # This creates a boolean mask of columns that have the blue color
+                # --- BAR DETECTION ---
                 col_mask = np.any(np.all(img == target_color, axis=-1), axis=0)
                 col_indices = np.where(col_mask)[0]
 
-                if len(col_indices) == 0:
-                    # No bar found
-                    current_time = time.time()
-                    if was_detecting:
-                        print("Lost detection (Game Over).")
-                        time.sleep(self.wait_after_loss)
-                        was_detecting = False
-                        self.is_clicking = False
+                if len(col_indices) > 0:
+                    # === BAR VISIBLE: PLAY GAME ===
+                    last_bar_seen_time = time.time() # Reset AFK/Recast timer
+                    
+                    min_c, max_c = col_indices[0], col_indices[-1]
+                    bar_img = img[:, min_c:max_c+1]
+
+                    dark_mask = np.any(np.all(bar_img == dark_color, axis=-1), axis=1)
+                    dark_indices = np.where(dark_mask)[0]
+                    white_mask = np.any(np.all(bar_img == white_color, axis=-1), axis=1)
+                    white_indices = np.where(white_mask)[0]
+
+                    if len(white_indices) > 0 and len(dark_indices) > 0:
+                        white_center = np.mean(white_indices)
+                        dark_center = np.mean(dark_indices)
+                        
+                        raw_error = dark_center - white_center
+                        normalized_error = raw_error / height 
+                        
+                        derivative = normalized_error - self.previous_error
+                        self.previous_error = normalized_error
+                        pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
+                        
+                        if pd_output > 0:
+                            if not self.is_clicking:
+                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+                                self.is_clicking = True
+                        else:
+                            if self.is_clicking:
+                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                                self.is_clicking = False
+                else:
+                    # === NO BAR: IDLE / RECAST LOGIC ===
+                    if self.is_clicking:
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+                        self.is_clicking = False
+                    
+                    # Check timers
+                    current_time = time.time()
+                    time_since_seen_bar = current_time - last_bar_seen_time
+                    time_since_last_cast = current_time - last_cast_performed
+                    
+                    # Logic:
+                    # 1. We haven't seen a bar for > 2.5 seconds (Game ended or we are waiting)
+                    # 2. We haven't cast in > 4.5 seconds (Cooldown between clicks)
+                    # 3. This combination ensures we assume the catch is done, and triggers a new cast.
+                    
+                    if time_since_seen_bar > 2.5 and time_since_last_cast > 4.5:
+                        print("Catch assumed complete. Recasting.")
+                        
+                        # Run post-catch tasks first
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
                                 self.perform_auto_purchase_sequence(); self.purchase_counter = 0
                         if self.item_check_var.get(): self.perform_store_fruit()
                         if self.auto_bait_var.get(): self.perform_bait_select()
+                        
+                        # CAST
                         self.cast()
-                        last_detection_time = time.time()
-                    elif current_time - last_detection_time > self.scan_timeout:
-                        print("Timeout. Recasting...")
-                        if self.item_check_var.get(): self.perform_store_fruit()
-                        if self.auto_bait_var.get(): self.perform_bait_select()
-                        self.cast()
-                        last_detection_time = time.time()
-                    time.sleep(0.01) # Short sleep when just scanning
-                    continue
-
-                # Bar Found - Slice it
-                min_c, max_c = col_indices[0], col_indices[-1]
-                bar_img = img[:, min_c:max_c+1]
-
-                # Find Dark and White components using NumPy masks
-                dark_mask = np.any(np.all(bar_img == dark_color, axis=-1), axis=1)
-                dark_indices = np.where(dark_mask)[0]
-                
-                white_mask = np.any(np.all(bar_img == white_color, axis=-1), axis=1)
-                white_indices = np.where(white_mask)[0]
-
-                if len(white_indices) > 0 and len(dark_indices) > 0:
-                    was_detecting = True
-                    last_detection_time = time.time()
+                        last_cast_performed = time.time()
                     
-                    # Calculate centroids
-                    white_center = np.mean(white_indices)
-                    dark_center = np.mean(dark_indices)
-                    
-                    # Normalize Error
-                    raw_error = dark_center - white_center
-                    # Use full height of overlay or real_height for normalization
-                    normalized_error = raw_error / height 
-                    
-                    # PD Control
-                    derivative = normalized_error - self.previous_error
-                    self.previous_error = normalized_error
-                    pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
-                    
-                    time_since_cast = time.time() - self.last_cast_time
-                    if pd_output > 0:
-                        if time_since_cast > 3.0: 
-                            if not self.is_clicking:
-                                win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-                                self.is_clicking = True
-                    else:
-                        if self.is_clicking:
-                            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
-                            self.is_clicking = False
-                
-                # NO SLEEP HERE. Let DXCam dictate speed (60fps target).
+                    time.sleep(0.01) # Short sleep to save CPU when idle
 
         except Exception as e: print(f"Error in fishing loop: {e}")
         finally:
