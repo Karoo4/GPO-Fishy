@@ -9,6 +9,8 @@ import ctypes
 import dxcam
 import win32api
 import win32con
+import win32gui  # ADDED: For Click-Through Overlay
+import mss       # ADDED: Required for logic
 from PIL import Image, ImageTk, ImageEnhance, ImageOps, ImageDraw
 import requests
 from io import BytesIO
@@ -31,7 +33,7 @@ if not is_admin():
 # --- CONFIGURATION ---
 THEME_BG = "#0b0b0b"
 THEME_ACCENT = "#ff8d00" 
-THEME_CARD = "#1a1a1a"   
+THEME_CARD = "#1a1a1a"    
 THEME_NOTIF_BG = "#222222"
 FONT_MAIN = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 11, "bold")
@@ -82,18 +84,18 @@ class KarooFish:
         self.dragging = False
         self.resizing = False
         self.resize_edge = None
-        self.border_size = 5      
+        self.border_size = 5       
         
-        self.purchase_counter = 0     
+        self.purchase_counter = 0      
         self.session_loops = 0        
         self.kp = 0.15 
         self.kd = 0.5
         self.previous_error = 0
-        self.scan_timeout = 15.0 # Matched MSS
-        self.wait_after_loss = 1.0
+        self.scan_timeout = 15.0 
+        self.rdp_click_hold = 0.05 # Minimum hold time
         
-        self.purchase_delay_after_key = 2.5
-        self.clean_step_delay = 1.5
+        self.purchase_delay_after_key = 1.0 # REDUCED from 2.5
+        self.clean_step_delay = 1.0 # REDUCED from 1.5
         
         self.dpi_scale = self.get_dpi_scale()
         self.overlay_area = {
@@ -577,14 +579,19 @@ class KarooFish:
             self.purchase_counter = 0; self.session_loops = 0 
             self.afk_session_label.config(text="0"); self.last_user_activity = time.time() 
             self.fishing_status_lbl.config(text="Fishing: ON", fg="#00ff00")
-            if self.overlay_window: self.overlay_window.withdraw()
+            
+            # --- MAKE OVERLAY CLICK-THROUGH (TRANSPARENT TO MOUSE) ---
+            if self.overlay_window: self.set_overlay_click_through(True)
+            
             threading.Thread(target=self.run_fishing_loop, daemon=True).start()
         else:
             self.fishing_status_lbl.config(text="Fishing: OFF", fg="red")
             self.is_clicking = False; self.is_performing_action = False
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             self.record_session()
-            if self.overlay_window: self.overlay_window.deiconify()
+            
+            # --- MAKE OVERLAY SOLID (MOVABLE) ---
+            if self.overlay_window: self.set_overlay_click_through(False)
 
     def toggle_reroll(self):
         if self.fishing_active: return
@@ -624,34 +631,38 @@ class KarooFish:
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
-            win32api.SetCursorPos((x, y)); time.sleep(0.02)
-            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0); time.sleep(0.05)
+            win32api.SetCursorPos((x, y)); time.sleep(0.01)
+            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0); time.sleep(0.01)
         except Exception: pass
 
     def click(self, pt, debug_name="Target", hold_time=0.25):
         if not pt: return
         try:
             x, y = int(pt[0]), int(pt[1])
-            win32api.SetCursorPos((x, y)); time.sleep(0.02)
-            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0); time.sleep(0.05)
+            win32api.SetCursorPos((x, y)); time.sleep(0.01)
+            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 1, 1, 0, 0); time.sleep(0.02)
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
             actual_hold = max(hold_time, self.rdp_click_hold)
             time.sleep(actual_hold) 
-            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0); time.sleep(0.05)
+            win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0); time.sleep(0.02)
         except Exception as e: print(f"Click Error on {debug_name}: {e}")
 
     # --- ACTIONS (FISHING) ---
     def get_pixel_color_at_pt(self, sct, pt):
-        """Helper for auto-purchase verification (Using MSS for simple point check)"""
+        """Helper for auto-purchase verification"""
         scaled = self.get_scaled_point(pt)
         if not scaled: return (0,0,0)
         monitor = {"top": scaled[1], "left": scaled[0], "width": 1, "height": 1}
         img = np.array(sct.grab(monitor))
         return (img[0,0,0], img[0,0,1], img[0,0,2]) # B, G, R
+    
+    def get_scaled_point(self, pt):
+        if not pt: return None
+        return (int(pt[0]), int(pt[1]))
 
     def perform_auto_purchase_sequence(self):
         """
-        RDP-Optimized Auto Purchase with improved logic to stop looping inputs.
+        RDP-Optimized Auto Purchase - SPEEDED UP
         """
         try:
             self.is_performing_action = True 
@@ -660,30 +671,27 @@ class KarooFish:
             print("Starting Auto Purchase...")
             
             # Standard sequence
-            keyboard.press('e'); time.sleep(0.3); keyboard.release('e')
+            keyboard.press('e'); time.sleep(0.1); keyboard.release('e')
             time.sleep(self.purchase_delay_after_key) 
-            self.click(self.point_coords[1], "Pt 1 (Yes)", hold_time=0.35); time.sleep(1.5) 
-            self.click(self.point_coords[2], "Pt 2 (Input)", hold_time=0.35); time.sleep(1.5)
+            self.click(self.point_coords[1], "Pt 1 (Yes)", hold_time=0.2); time.sleep(0.6) 
+            self.click(self.point_coords[2], "Pt 2 (Input)", hold_time=0.2); time.sleep(0.6)
             
             amount_str = str(self.amount_var.get())
-            for char in amount_str: keyboard.write(char); time.sleep(0.2)
-            time.sleep(1.0)
+            for char in amount_str: keyboard.write(char); time.sleep(0.05)
+            time.sleep(0.5)
             
-            self.click(self.point_coords[1], "Pt 1 (Confirm)", hold_time=0.35)
-            time.sleep(2.0) 
+            self.click(self.point_coords[1], "Pt 1 (Confirm)", hold_time=0.2)
+            time.sleep(0.8) 
             
-            # --- FIX: ROBUST EXIT LOOP ---
-            # Instead of relying purely on color change (which can lag on RDP), 
-            # we also limit the loop and use the camera if available.
             print("Entering Menu Exit Safety Loop...")
             
             sct = mss.mss()
             target_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
             
             safety_strikes = 0
-            while safety_strikes < 10: # Limit to 10 tries
-                self.click(self.point_coords[3], "Pt 3 (Exit Failsafe)", hold_time=0.35); time.sleep(0.5)
-                self.click(self.point_coords[2], "Pt 2 (Input - Safety)", hold_time=0.35); time.sleep(1.0)
+            while safety_strikes < 10: 
+                self.click(self.point_coords[3], "Pt 3 (Exit Failsafe)", hold_time=0.2); time.sleep(0.3)
+                self.click(self.point_coords[2], "Pt 2 (Input - Safety)", hold_time=0.2); time.sleep(0.3)
                 
                 current_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
                 diff = sum(abs(c - t) for c, t in zip(current_bgr, target_bgr))
@@ -694,7 +702,7 @@ class KarooFish:
                 else: 
                     safety_strikes += 1
             
-            self.move_to(self.point_coords[4]); time.sleep(1.0)
+            self.move_to(self.point_coords[4]); time.sleep(0.5)
             
         except Exception as e: print(f"Auto Purchase Error: {e}")
         finally: self.is_performing_action = False
@@ -702,14 +710,14 @@ class KarooFish:
     def perform_store_fruit(self):
         try:
             self.is_performing_action = True 
-            keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
-            keyboard.press('3'); time.sleep(0.25); keyboard.release('3')
+            keyboard.press('2'); time.sleep(0.1); keyboard.release('2'); time.sleep(0.3)
+            keyboard.press('3'); time.sleep(0.1); keyboard.release('3')
             time.sleep(self.clean_step_delay)
             if self.point_coords.get(5):
                 for i in range(3):
-                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.35); time.sleep(0.8)
-            keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
-            self.move_to(self.point_coords[4]); time.sleep(0.5)
+                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.2); time.sleep(0.4)
+            keyboard.press('2'); time.sleep(0.1); keyboard.release('2'); time.sleep(0.3)
+            self.move_to(self.point_coords[4]); time.sleep(0.2)
         except: keyboard.press_and_release('2')
         finally: self.is_performing_action = False
 
@@ -719,15 +727,15 @@ class KarooFish:
         if not p6: return
         try:
             self.is_performing_action = True 
-            self.click(p6, "Pt 6 (Bait Select)", hold_time=0.35); time.sleep(0.8)
-            self.move_to(self.point_coords[4]); time.sleep(0.5)
+            self.click(p6, "Pt 6 (Bait Select)", hold_time=0.2); time.sleep(0.5)
+            self.move_to(self.point_coords[4]); time.sleep(0.2)
         except: pass
         finally: self.is_performing_action = False
 
     def cast(self):
         if self.is_performing_action: return 
         self.move_to(self.point_coords[4])
-        time.sleep(0.5)
+        time.sleep(0.3)
         self.click(self.point_coords[4], "Cast (RDP Safe)", hold_time=1.9)
         self.is_clicking = False
         self.session_loops += 1
@@ -737,18 +745,18 @@ class KarooFish:
              current_total = self.stats['total_caught'] + self.session_loops
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
         self.previous_error = 0
-        time.sleep(2.5) 
+        
+        # DRASTICALLY REDUCED ROD RETURN WAIT (Was 2.5s)
+        time.sleep(0.8) 
 
     # --- HYBRID ENGINE: DXCAM CAPTURE + MSS LOGIC ---
     def run_fishing_loop(self):
         print("Fishing Loop Started (Hybrid: DXCam Engine + MSS Logic)")
         
-        # BGR Colors (DXCam returns BGRA/BGR)
         target_color = np.array([0xff, 0xaa, 0x55], dtype=np.uint8) # BGR
         dark_color = np.array([0x19, 0x19, 0x19], dtype=np.uint8)
         white_color = np.array([0xff, 0xff, 0xff], dtype=np.uint8)
         
-        # Lazy Load Camera
         if self.camera is None: 
             try: self.camera = dxcam.create(output_color="BGR")
             except: pass
@@ -757,25 +765,23 @@ class KarooFish:
 
         black_screen_strikes = 0 
         
-        # Initial Cast
         if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
         self.cast()
         
-        # Logic Flags (Exact copy of MSS Logic)
         last_detection_time = time.time()
         was_detecting = False
 
         try:
             while self.fishing_active:
-                if self.is_performing_action: time.sleep(0.2); continue
+                if self.is_performing_action: time.sleep(0.1); continue
 
                 # 1. Grab Image (DXCam - Fast)
                 img_full = self.camera.get_latest_frame()
-                if img_full is None: time.sleep(0.01); continue
+                if img_full is None: continue 
 
                 if np.max(img_full) == 0:
                     black_screen_strikes += 1
-                    if black_screen_strikes < 20: time.sleep(0.01); continue
+                    if black_screen_strikes < 20: continue
                     else:
                         try: self.camera.stop(); del self.camera; self.camera = None; time.sleep(1.0)
                         except: pass
@@ -797,18 +803,16 @@ class KarooFish:
                 if oy + oh > img_full.shape[0] or ox + ow > img_full.shape[1]: img = img_full 
                 else: img = img_full[oy:oy+oh, ox:ox+ow]
 
-                # 3. Detection (NumPy - Fast)
-                # Check for Bar (Blue Border)
-                # Use Masking instead of loops
+                # 3. Detection
                 col_mask = np.any(np.all(img == target_color, axis=-1), axis=0)
                 col_indices = np.where(col_mask)[0]
                 
                 found_first = len(col_indices) > 0
 
-                # === LOGIC FROM MSS SCRIPT STARTS HERE ===
+                # === FAST LOGIC START ===
                 if not found_first:
                     current_time = time.time()
-                    if was_detecting: # Game was running, now it's not -> Fish Caught
+                    if was_detecting: # Caught
                         was_detecting = False
                         self.is_clicking = False
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
@@ -830,10 +834,9 @@ class KarooFish:
                         self.cast()
                         last_detection_time = time.time()
                     
-                    time.sleep(0.01) # Short wait scanning
                     continue
 
-                # Bar Found -> Play the Game
+                # Bar Found
                 min_c, max_c = col_indices[0], col_indices[-1]
                 bar_img = img[:, min_c:max_c+1]
                 
@@ -851,7 +854,7 @@ class KarooFish:
                     dark_center = np.mean(dark_indices)
                     
                     raw_error = dark_center - white_center
-                    normalized_error = raw_error / oh # Normalized by overlay height
+                    normalized_error = raw_error / oh 
                     
                     derivative = normalized_error - self.previous_error
                     self.previous_error = normalized_error
@@ -867,9 +870,8 @@ class KarooFish:
                         if self.is_clicking:
                             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                             self.is_clicking = False
-                # === LOGIC ENDS HERE ===
-                
-                # No Sleep here for max speed
+
+                # REMOVED SLEEP FOR MAX SPEED
 
         except Exception as e: print(f"Error in fishing loop: {e}")
         finally:
@@ -879,7 +881,7 @@ class KarooFish:
 
     def run_reroll_loop(self):
         print("Reroll Loop Started (Hybrid)")
-        sct = mss.mss() # Use MSS for simple pixel checks (Reliable)
+        sct = mss.mss() 
         try:
             p8 = self.point_coords.get(8)
             while self.reroll_active:
@@ -906,6 +908,9 @@ class KarooFish:
         if self.overlay_active:
             self.overlay_status.config(text="Overlay: ON", fg=THEME_ACCENT)
             self.create_overlay()
+            # If fishing is already active, make overlay transparent immediately
+            if self.fishing_active:
+                 self.set_overlay_click_through(True)
         else:
             self.overlay_status.config(text="Overlay: OFF", fg="gray")
             self.destroy_overlay()
@@ -924,6 +929,23 @@ class KarooFish:
         self.canvas.bind('<B1-Motion>', self.on_mouse_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_mouse_up)
         self.canvas.bind('<Motion>', self.on_mouse_move)
+
+    def set_overlay_click_through(self, enable):
+        """
+        Uses Win32 API to make the window transparent to mouse clicks
+        when Fishing is active.
+        """
+        if not self.overlay_window: return
+        try:
+            hwnd = win32gui.GetParent(self.overlay_window.winfo_id())
+            style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+            if enable:
+                style = style | win32con.WS_EX_TRANSPARENT | win32con.WS_EX_LAYERED
+            else:
+                style = style & ~win32con.WS_EX_TRANSPARENT
+            win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, style)
+        except Exception as e:
+            print(f"Failed to set click-through: {e}")
 
     def on_mouse_move(self, event):
         x, y = event.x, event.y
