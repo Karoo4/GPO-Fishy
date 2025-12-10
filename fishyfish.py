@@ -36,6 +36,7 @@ THEME_NOTIF_BG = "#222222"
 FONT_MAIN = ("Segoe UI", 10)
 FONT_BOLD = ("Segoe UI", 11, "bold")
 FONT_TITLE = ("Segoe UI", 20, "bold")
+FONT_AFK = ("Segoe UI", 48, "bold")
 
 STATS_FILE = "karoo_stats.json"
 CONFIG_FILE = "karoo_config.json"
@@ -43,7 +44,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish - RDP Resilient")
+        self.root.title("Karoo Fish - RDP Fixed")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -56,6 +57,7 @@ class KarooFish:
         self.reroll_active = False
         self.overlay_active = False
         self.afk_mode_active = False
+        
         self.overlay_window = None
         self.is_clicking = False
         self.is_performing_action = False 
@@ -71,6 +73,8 @@ class KarooFish:
         self.resize_threshold = 10
         self.dragging = False
         self.resizing = False
+        self.resize_edge = None
+        self.border_size = 5      
         
         self.purchase_counter = 0     
         self.session_loops = 0        
@@ -92,7 +96,7 @@ class KarooFish:
 
         self.hotkeys = {'toggle_loop': 'f1', 'toggle_overlay': 'f2', 'exit': 'f3', 'toggle_afk': 'f4'}
         
-        # Points now store RELATIVE coordinates (0.0 to 1.0)
+        # Points now store RELATIVE coordinates (0.0 to 1.0) for RDP safety
         self.point_coords = {1: None, 2: None, 3: None, 4: None, 5: None, 6: None, 7: None, 8: None}
         self.point_labels = {} 
 
@@ -132,8 +136,6 @@ class KarooFish:
                     if v:
                         idx = int(k)
                         self.point_coords[idx] = tuple(v)
-                        # Displaying loaded coords - assuming they might be pixels or ratios
-                        # We will display "Set" if it exists
                         if idx in self.point_labels:
                             self.point_labels[idx].config(text="Saved", fg="#00ff00")
             if "hotkeys" in data: self.hotkeys.update(data["hotkeys"])
@@ -432,11 +434,10 @@ class KarooFish:
             time.sleep(0.02)
             
             # 5. VERIFY: Did it move? (Fix for "Cursor not in RDP")
-            # If RDP is unfocused, local cursor might fight it. We fight back.
             current_pos = win32api.GetCursorPos()
             dist = ((current_pos[0]-tx)**2 + (current_pos[1]-ty)**2)**0.5
             
-            if dist > 20: # If we are more than 20 pixels away, FORCE IT
+            if dist > 20: 
                 win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
                 time.sleep(0.02)
                 
@@ -446,7 +447,6 @@ class KarooFish:
         if not pt_ratio: return
         try:
             self.move_to(pt_ratio)
-            # Short wait for RDP to register the move
             time.sleep(0.1) 
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
             time.sleep(max(hold_time, 0.2)) 
@@ -472,11 +472,7 @@ class KarooFish:
         self.previous_error = 0
         time.sleep(2.0)
 
-    # ... [Auto Purchase/Store Functions omitted for brevity, logic identical to above, just pass pt_ratio] ...
-    # Note: Ensure perform_auto_purchase_sequence, perform_store_fruit, etc. use the updated self.click()
-
     def perform_auto_purchase_sequence(self):
-         # Just ensures logic uses updated move_to/click
          try:
             self.is_performing_action = True
             keyboard.press('e'); time.sleep(0.2); keyboard.release('e')
@@ -493,12 +489,10 @@ class KarooFish:
          finally: self.is_performing_action = False
 
     def perform_store_fruit(self):
-        # Simplified for brevity - assumes logic is same but uses new click
         try:
             self.is_performing_action = True
             keyboard.press_and_release('2'); time.sleep(0.5); keyboard.press_and_release('3')
             time.sleep(1.0)
-            # Blind click store for robustness in MSS
             for i in range(3):
                 self.click(self.point_coords[5], "Store"); time.sleep(0.8)
             keyboard.press_and_release('2'); time.sleep(0.5)
@@ -520,7 +514,6 @@ class KarooFish:
         dark_color = (0x19, 0x19, 0x19)
         white_color = (0xff, 0xff, 0xff)
         
-        # Initialize MSS
         sct = mss.mss()
         
         try:
@@ -532,39 +525,28 @@ class KarooFish:
             while self.fishing_active:
                 if self.is_performing_action: time.sleep(0.1); continue
 
-                # DYNAMIC MONITOR CHECK
-                # We need to grab the full virtual screen or the specific monitor
-                # If RDP resizes, monitor 1 dimensions change.
-                monitor = sct.monitors[1] # Primary
-                
+                monitor = sct.monitors[1]
                 try:
                     sct_img = sct.grab(monitor)
                     img_full = np.array(sct_img)[:, :, :3]
                 except:
-                    # If resize happened, sct might need reset
                     sct.close()
                     sct = mss.mss()
                     continue
 
-                if np.max(img_full) == 0: # Black screen
+                if np.max(img_full) == 0:
                     time.sleep(1.0); continue
 
-                # Overlay Logic: 
-                # Problem: Overlay area is pixels. If resize, area is wrong.
-                # Solution: We must rely on the USER to move the overlay if they resize.
-                # But we clamp it to screen bounds to prevent crash.
                 x, y = self.overlay_area['x'], self.overlay_area['y']
                 w, h = self.overlay_area['width'], self.overlay_area['height']
                 
-                # Clamp check
                 sh, sw, _ = img_full.shape
                 if x+w > sw: w = sw - x
                 if y+h > sh: h = sh - y
-                if w <= 0 or h <= 0: continue # Overlay off screen
+                if w <= 0 or h <= 0: continue
                 
                 img = img_full[y:y+h, x:x+w]
 
-                # --- SCANNING LOGIC (Standard PD Loop) ---
                 point1_x = None; point1_y = None; found_first = False
                 for row_idx in range(h):
                     for col_idx in range(w):
@@ -576,7 +558,6 @@ class KarooFish:
                 if not found_first:
                     current_time = time.time()
                     if was_detecting:
-                        # Reel in logic
                         was_detecting = False
                         self.is_clicking = False
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
@@ -591,14 +572,12 @@ class KarooFish:
                         self.cast()
                         last_detection_time = time.time()
                     elif current_time - last_detection_time > self.scan_timeout:
-                         # Timeout logic
                         if self.item_check_var.get(): self.perform_store_fruit()
                         self.cast()
                         last_detection_time = time.time()
                     time.sleep(0.05)
                     continue
 
-                # Point 2 logic... (Bar end)
                 point2_x = None; row_idx = point1_y - y
                 for col_idx in range(w - 1, -1, -1):
                      b, g, r = img[row_idx, col_idx, 0:3]
@@ -607,12 +586,10 @@ class KarooFish:
                 
                 if point2_x is None: continue
                 
-                # Crop bar area
                 temp_w = point2_x - point1_x + 1
                 temp_x = point1_x - x
                 temp_img = img[:, temp_x:temp_x+temp_w]
                 
-                # Find white bar
                 white_top_y = None
                 for r_idx in range(h):
                     for c_idx in range(temp_w):
@@ -626,20 +603,6 @@ class KarooFish:
                 was_detecting = True
                 last_detection_time = time.time()
                 
-                # Check for dark bar (target)
-                # ... (Simplified logic for brevity: assumes checking dark sections) ...
-                # Actually finding the center of the dark bar to calc PD
-                # This part is largely resolution independent as long as colors match
-                
-                # NOTE: For brevity, I am inferring the PD logic from previous prompts
-                # Use the center of the vertical area
-                
-                # If we found bar, we calculate error. 
-                # Ideally, we need the "Dark Bar" Y position here.
-                # Assuming simple "click if white bar is below dark bar" logic or similar
-                
-                # Re-implementing simplified PD for robustness:
-                # Find Dark Bar Y
                 dark_y = None
                 for r_idx in range(h):
                     for c_idx in range(temp_w):
@@ -649,14 +612,7 @@ class KarooFish:
                     if dark_y is not None: break
                 
                 if dark_y is not None:
-                     error = dark_y - white_top_y # Positive if Dark is below White
-                     # PD Logic
-                     # If Dark is below White, we need to let go (click=False) to let White drop?
-                     # Actually: You hold click to raise the white bar.
-                     # If White is BELOW Dark, we need to RAISE White -> Click.
-                     # If White is ABOVE Dark, we need to LOWER White -> Release.
-                     
-                     if white_top_y > dark_y: # White is lower (pixels increase downwards)
+                     if white_top_y > dark_y: 
                          if not self.is_clicking:
                              win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
                              self.is_clicking = True
@@ -665,34 +621,42 @@ class KarooFish:
                              win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                              self.is_clicking = False
                 
-                time.sleep(0.02) # Fast loop
+                time.sleep(0.02)
 
         except Exception as e: print(f"Loop Error: {e}")
         finally:
             if self.is_clicking: win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             self.is_clicking = False
             sct.close()
-            
-    # ... [Rest of overlay/reroll logic stays similar] ...
-    # Reroll loop also needs sct logic update if used.
 
-    # [Standard App Skeleton continues...]
-    def destroy_overlay(self):
-        if self.overlay_window: self.overlay_window.destroy(); self.overlay_window = None
+    def run_reroll_loop(self):
+        print("Reroll Loop Started (MSS Version)")
+        with mss.mss() as sct:
+            try:
+                p8 = self.point_coords.get(8)
+                while self.reroll_active:
+                    try:
+                        mon = sct.monitors[1]
+                        sct_img = sct.grab(mon)
+                        img = np.array(sct_img)[:, :, :3]
+                    except: 
+                        time.sleep(0.1); continue
+                    
+                    if np.max(img) == 0: time.sleep(1.0); continue
+                    
+                    cur_w = win32api.GetSystemMetrics(0)
+                    cur_h = win32api.GetSystemMetrics(1)
+                    cx = int(p8[0] * cur_w)
+                    cy = int(p8[1] * cur_h)
 
-    def exit_app(self):
-        self.save_config()
-        self.fishing_active = False; self.reroll_active = False
-        try: keyboard.unhook_all()
-        except: pass
-        self.root.destroy()
-        sys.exit()
-
-# [Standard App Skeleton continues...]
-# Need to include the rest of the Tkinter setup functions (create_overlay, on_mouse_drag etc)
-# They are unchanged except strictly ensuring they don't crash if screen dims change.
-# Since the overlay uses Tkinter window manager, it handles its own positioning mostly.
-# The issue is the USER needs to move it if they resize RDP.
+                    if cy < img.shape[0] and cx < img.shape[1]:
+                        b, g, r = img[cy, cx]
+                        if (abs(r - 179) < 35) and (abs(g - 122) < 35) and (abs(b - 0) < 35):
+                            self.click(p8, "Reroll")
+                            time.sleep(0.2)
+                    time.sleep(0.1)
+            except Exception as e: print(f"Error in reroll loop: {e}")
+            finally: self.save_config()
 
     def toggle_overlay(self):
         self.overlay_active = not self.overlay_active
@@ -703,6 +667,7 @@ class KarooFish:
             self.overlay_status.config(text="Overlay: OFF", fg="gray")
             self.destroy_overlay()
 
+    # --- RESTORED OVERLAY LOGIC ---
     def create_overlay(self):
         if self.overlay_window: return
         self.overlay_window = tk.Toplevel(self.root)
@@ -716,23 +681,65 @@ class KarooFish:
         self.canvas.bind('<Button-1>', self.on_mouse_down)
         self.canvas.bind('<B1-Motion>', self.on_mouse_drag)
         self.canvas.bind('<ButtonRelease-1>', self.on_mouse_up)
-        # self.canvas.bind('<Motion>', self.on_mouse_move) # Optional cursor style
+        self.canvas.bind('<Motion>', self.on_mouse_move)
+
+    def on_mouse_move(self, event):
+        x, y = event.x, event.y
+        w = self.overlay_window.winfo_width(); h = self.overlay_window.winfo_height()
+        edge = 15
+        left, right, top, bottom = x < edge, x > w - edge, y < edge, y > h - edge
+        if top and left: self.canvas.config(cursor='top_left_corner')
+        elif top and right: self.canvas.config(cursor='top_right_corner')
+        elif bottom and left: self.canvas.config(cursor='bottom_left_corner')
+        elif bottom and right: self.canvas.config(cursor='bottom_right_corner')
+        elif left or right: self.canvas.config(cursor='sb_h_double_arrow')
+        elif top or bottom: self.canvas.config(cursor='sb_v_double_arrow')
+        else: self.canvas.config(cursor='fleur')
 
     def on_mouse_down(self, event):
         self.start_x, self.start_y = event.x_root, event.y_root
         self.win_start_x, self.win_start_y = self.overlay_window.winfo_x(), self.overlay_window.winfo_y()
-        self.dragging = True
+        self.win_start_w, self.win_start_h = self.overlay_window.winfo_width(), self.overlay_window.winfo_height()
+        w, h = self.win_start_w, self.win_start_h
+        edge = 15
+        self.resize_edge = {'left': event.x < edge, 'right': event.x > w - edge, 'top': event.y < edge, 'bottom': event.y > h - edge}
+        if any(self.resize_edge.values()): self.resizing = True
+        else: self.dragging = True
 
     def on_mouse_drag(self, event):
+        dx, dy = event.x_root - self.start_x, event.y_root - self.start_y
         if self.dragging:
-            dx, dy = event.x_root - self.start_x, event.y_root - self.start_y
             self.overlay_window.geometry(f"+{self.win_start_x + dx}+{self.win_start_y + dy}")
-            # Save new pos immediately
-            self.overlay_area['x'] = self.overlay_window.winfo_x()
-            self.overlay_area['y'] = self.overlay_window.winfo_y()
+            self.save_geo()
+        elif self.resizing:
+            nx, ny, nw, nh = self.win_start_x, self.win_start_y, self.win_start_w, self.win_start_h
+            if self.resize_edge['right']: nw += dx
+            if self.resize_edge['bottom']: nh += dy
+            if self.resize_edge['left']: nx += dx; nw -= dx
+            if self.resize_edge['top']: ny += dy; nh -= dy
+            nw, nh = max(50, nw), max(50, nh)
+            self.overlay_window.geometry(f"{nw}x{nh}+{nx}+{ny}")
+            self.save_geo()
 
     def on_mouse_up(self, event):
-        self.dragging = False
+        self.dragging = False; self.resizing = False
+        self.save_geo()
+
+    def save_geo(self, e=None):
+        if self.overlay_window:
+            self.overlay_area = {'x': self.overlay_window.winfo_x(), 'y': self.overlay_window.winfo_y(), 
+                                 'width': self.overlay_window.winfo_width(), 'height': self.overlay_window.winfo_height()}
+
+    def destroy_overlay(self):
+        if self.overlay_window: self.overlay_window.destroy(); self.overlay_window = None
+
+    def exit_app(self):
+        self.save_config()
+        self.fishing_active = False; self.reroll_active = False
+        try: keyboard.unhook_all()
+        except: pass
+        self.root.destroy()
+        sys.exit()
 
 if __name__ == "__main__":
     root = tk.Tk()
