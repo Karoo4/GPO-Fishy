@@ -51,7 +51,7 @@ CONFIG_FILE = "karoo_config.json"
 class KarooFish:
     def __init__(self, root):
         self.root = root
-        self.root.title("Karoo Fish - RDP Ultra Stable")
+        self.root.title("Karoo Fish - NumPy Speed")
         self.root.geometry("460x950")
         self.root.configure(bg=THEME_BG)
         self.root.attributes('-topmost', True)
@@ -79,8 +79,7 @@ class KarooFish:
         self.base_width = win32api.GetSystemMetrics(0)
         self.base_height = win32api.GetSystemMetrics(1)
         
-        # --- RDP TIMING VARS (TUNED FOR LAG) ---
-        # Increased to 0.25s minimum to ensure clicks register on laggy connections
+        # --- RDP TIMING VARS ---
         self.rdp_click_hold = 0.25 
         self.rdp_move_delay = 0.08 
         
@@ -93,7 +92,7 @@ class KarooFish:
         
         self.purchase_counter = 0      
         self.session_loops = 0        
-        self.kp = 0.1
+        self.kp = 0.15 # Slightly higher default for faster response
         self.kd = 0.5
         self.previous_error = 0
         self.scan_timeout = 15.0
@@ -649,10 +648,6 @@ class KarooFish:
         return (int(pt[0] * scale_x), int(pt[1] * scale_y))
 
     def move_to(self, pt):
-        """
-        RDP OPTIMIZATION: Moves, waits, and moves again.
-        This forces the RDP cursor to sync with the local cursor before clicking.
-        """
         if not pt: return
         scaled = self.get_scaled_point(pt)
         if not scaled: return
@@ -660,30 +655,19 @@ class KarooFish:
             x, y = scaled
             cw = win32api.GetSystemMetrics(0)
             ch = win32api.GetSystemMetrics(1)
-            
-            # Normalize to 65535
             nx = int(x * 65535 / cw)
             ny = int(y * 65535 / ch)
-            
-            # 1. Set Cursor (Immediate)
             win32api.SetCursorPos((x, y))
             time.sleep(self.rdp_move_delay) 
-            
-            # 2. Force Event (RDP Update)
             win32api.mouse_event(win32con.MOUSEEVENTF_ABSOLUTE | win32con.MOUSEEVENTF_MOVE, nx, ny, 0, 0)
             time.sleep(self.rdp_move_delay)
         except Exception: pass
 
     def click(self, pt, debug_name="Target", hold_time=0.25):
-        """
-        RDP OPTIMIZATION: Increased hold time. 
-        RDP often drops packets if the click is too fast (< 0.1s).
-        """
         if not pt: return
         try:
             self.move_to(pt)
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-            # Use variable hold time if provided, or default RDP safe time
             actual_hold = max(hold_time, self.rdp_click_hold)
             time.sleep(actual_hold) 
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
@@ -692,12 +676,10 @@ class KarooFish:
 
     # --- ACTIONS (FISHING) ---
     def get_pixel_color_at_pt(self, sct, pt):
-        """Gets color of a specific point given an MSS instance"""
         scaled = self.get_scaled_point(pt)
         if not scaled: return (0,0,0)
         monitor = {"top": scaled[1], "left": scaled[0], "width": 1, "height": 1}
         img = np.array(sct.grab(monitor))
-        # MSS returns BGRA, we want BGR or RGB comparison
         return (img[0,0,0], img[0,0,1], img[0,0,2]) # B, G, R
 
     def perform_auto_purchase_sequence(self):
@@ -706,70 +688,32 @@ class KarooFish:
             if not all([self.point_coords[1], self.point_coords[2], self.point_coords[3], self.point_coords[4]]): return
             
             print("Starting Auto Purchase...")
-            
-            # 1. Open Shop
             keyboard.press('e'); time.sleep(0.3); keyboard.release('e')
             time.sleep(self.purchase_delay_after_key) 
+            self.click(self.point_coords[1], "Pt 1 (Yes)", hold_time=0.35); time.sleep(1.5) 
+            self.click(self.point_coords[2], "Pt 2 (Input)", hold_time=0.35); time.sleep(1.5)
             
-            # 2. Click Yes
-            self.click(self.point_coords[1], "Pt 1 (Yes)", hold_time=0.35)
-            time.sleep(1.5) 
-            
-            # 3. Click Input
-            self.click(self.point_coords[2], "Pt 2 (Input)", hold_time=0.35)
-            time.sleep(1.5)
-            
-            # 4. Type Amount
             amount_str = str(self.amount_var.get())
-            for char in amount_str:
-                keyboard.write(char); time.sleep(0.2)
+            for char in amount_str: keyboard.write(char); time.sleep(0.2)
             time.sleep(1.0)
             
-            # 5. Confirm
             self.click(self.point_coords[1], "Pt 1 (Confirm)", hold_time=0.35)
-            time.sleep(2.0) # Wait for "Purchase Successful" text
+            time.sleep(2.0)
             
-            # --- FIX: CONSTANT CHECK + CLICK INPUT ---
             print("Entering Menu Exit Safety Loop...")
-            
             sct = mss.mss()
-            
-            # Capture the color of Point 3 (No/Exit) RIGHT NOW.
-            # We assume the menu is open because we just bought something.
             target_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
             
             safety_strikes = 0
-            max_safety_loops = 15 # Don't loop forever
-            
-            while safety_strikes < max_safety_loops:
-                # 1. Click Exit / No
-                self.click(self.point_coords[3], "Pt 3 (Exit Failsafe)", hold_time=0.35)
-                time.sleep(0.5)
-                
-                # 2. Click Input (User Request: "to ensure menu is closed")
-                # This helps deselect the "No" button or clear the UI
-                self.click(self.point_coords[2], "Pt 2 (Input - Safety)", hold_time=0.35)
-                time.sleep(1.0)
-                
-                # 3. Check if the color CHANGED
-                # If the menu closed, the color at Pt 3 should be different (the game world).
+            while safety_strikes < 15:
+                self.click(self.point_coords[3], "Pt 3 (Exit Failsafe)", hold_time=0.35); time.sleep(0.5)
+                self.click(self.point_coords[2], "Pt 2 (Input - Safety)", hold_time=0.35); time.sleep(1.0)
                 current_bgr = self.get_pixel_color_at_pt(sct, self.point_coords[3])
-                
-                # Calculate difference
                 diff = sum(abs(c - t) for c, t in zip(current_bgr, target_bgr))
-                
-                if diff > 50: 
-                    # Color changed significantly! The menu is likely gone.
-                    print("Menu closed successfully (Color changed).")
-                    break
-                else:
-                    # Color is same. Menu is STUCK.
-                    print(f"Menu stuck (Diff: {diff}). Clicking again...")
-                    safety_strikes += 1
+                if diff > 50: break
+                else: safety_strikes += 1
             
-            # Final reset movement
-            self.move_to(self.point_coords[4])
-            time.sleep(1.0)
+            self.move_to(self.point_coords[4]); time.sleep(1.0)
             
         except Exception as e: print(f"Auto Purchase Error: {e}")
         finally: self.is_performing_action = False
@@ -777,16 +721,12 @@ class KarooFish:
     def perform_store_fruit(self):
         try:
             self.is_performing_action = True 
-            # Slower keys for RDP
             keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
             keyboard.press('3'); time.sleep(0.25); keyboard.release('3')
             time.sleep(self.clean_step_delay)
-            
             if self.point_coords.get(5):
                 for i in range(3):
-                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.35)
-                    time.sleep(0.8)
-                    
+                    self.click(self.point_coords[5], f"Store Click {i+1}", hold_time=0.35); time.sleep(0.8)
             keyboard.press('2'); time.sleep(0.25); keyboard.release('2'); time.sleep(0.5)
             self.move_to(self.point_coords[4]); time.sleep(0.5)
         except: keyboard.press_and_release('2')
@@ -798,8 +738,7 @@ class KarooFish:
         if not p6: return
         try:
             self.is_performing_action = True 
-            self.click(p6, "Pt 6 (Bait Select)", hold_time=0.35) 
-            time.sleep(0.8)
+            self.click(p6, "Pt 6 (Bait Select)", hold_time=0.35); time.sleep(0.8)
             self.move_to(self.point_coords[4]); time.sleep(0.5)
         except: pass
         finally: self.is_performing_action = False
@@ -818,17 +757,19 @@ class KarooFish:
              current_total = self.stats['total_caught'] + self.session_loops
              self.root.after(0, lambda: self.afk_total_label.config(text=str(current_total)))
         self.previous_error = 0
-        time.sleep(2.5) # Increased wait after cast for RDP
+        time.sleep(2.5) 
 
+    # --- OPTIMIZED FISHING LOOP (NUMPY VECTORIZATION) ---
     def run_fishing_loop(self):
-        print("Fishing Loop Started (MSS + Scaling + RDP Opt)")
-        target_color = (0x55, 0xaa, 0xff) 
-        dark_color = (0x19, 0x19, 0x19)
-        white_color = (0xff, 0xff, 0xff)
+        print("Fishing Loop Started (NumPy Accelerated)")
+        # BGR Colors (MSS returns BGRA)
+        target_color = np.array([0xff, 0xaa, 0x55], dtype=np.uint8) # BGR for 0x55, 0xaa, 0xff
+        dark_color = np.array([0x19, 0x19, 0x19], dtype=np.uint8)
+        white_color = np.array([0xff, 0xff, 0xff], dtype=np.uint8)
         
-        sct = mss.mss() 
-        
+        sct = mss.mss()
         black_screen_strikes = 0 
+        
         try:
             if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
             self.cast()
@@ -838,59 +779,51 @@ class KarooFish:
             while self.fishing_active:
                 if self.is_performing_action: time.sleep(0.2); continue
 
-                # GRAB FRAME
-                try:
-                    monitor = sct.monitors[1]
-                    sct_img = sct.grab(monitor)
-                    img_full = np.array(sct_img)[:, :, :3]
-                except:
-                    sct = mss.mss()
-                    time.sleep(1.0)
-                    continue
-
-                if np.max(img_full) == 0:
-                    black_screen_strikes += 1
-                    if black_screen_strikes > 5:
-                        print("RDP Suspended. Pausing...")
-                        time.sleep(2.0)
-                        continue
-                else:
-                    black_screen_strikes = 0
-                
-                # --- SCALING FOR OVERLAY AREA ---
+                # 1. Scaling Area Calculation (Outside critical loop or only on resize)
                 curr_w = win32api.GetSystemMetrics(0)
                 curr_h = win32api.GetSystemMetrics(1)
-                
                 scale_x = curr_w / self.base_width
                 scale_y = curr_h / self.base_height
                 
-                x = int(self.overlay_area['x'] * scale_x)
-                y = int(self.overlay_area['y'] * scale_y)
-                width = int(self.overlay_area['width'] * scale_x)
-                height = int(self.overlay_area['height'] * scale_y)
+                ox = int(self.overlay_area['x'] * scale_x)
+                oy = int(self.overlay_area['y'] * scale_y)
+                ow = int(self.overlay_area['width'] * scale_x)
+                oh = int(self.overlay_area['height'] * scale_y)
                 
-                if y + height > img_full.shape[0] or x + width > img_full.shape[1]: img = img_full 
-                else: img = img_full[y:y+height, x:x+width]
+                monitor = {"top": oy, "left": ox, "width": ow, "height": oh}
 
-                point1_x = None; point1_y = None; found_first = False
-                for row_idx in range(height):
-                    for col_idx in range(width):
-                        b, g, r = img[row_idx, col_idx, 0:3]
-                        if r == target_color[0] and g == target_color[1] and b == target_color[2]:
-                            point1_x = x + col_idx; point1_y = y + row_idx; found_first = True; break
-                    if found_first: break
+                # 2. Grab Image
+                try:
+                    sct_img = sct.grab(monitor)
+                    img = np.array(sct_img)[:, :, :3] # Keep only BGR
+                except:
+                    sct = mss.mss(); time.sleep(1.0); continue
 
-                if not found_first:
+                if np.max(img) == 0:
+                    black_screen_strikes += 1
+                    if black_screen_strikes > 5:
+                        print("RDP Suspended. Pausing...")
+                        time.sleep(2.0); continue
+                else: black_screen_strikes = 0
+
+                # 3. Vectorized Detection (No for loops)
+                # Find columns that contain the Target Color (The Blue Bar Border)
+                # axis=0 means "down the rows", checking if color exists in that column
+                # This creates a boolean mask of shape (width,)
+                col_mask = np.any(np.all(img == target_color, axis=-1), axis=0)
+                col_indices = np.where(col_mask)[0]
+
+                if len(col_indices) == 0:
+                    # No bar found
                     current_time = time.time()
-                    if was_detecting:
+                    if was_detecting: # Lost bar after finding it -> Minigame over
                         was_detecting = False
                         self.is_clicking = False
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
-                                self.perform_auto_purchase_sequence()
-                                self.purchase_counter = 0
+                                self.perform_auto_purchase_sequence(); self.purchase_counter = 0
                         if self.item_check_var.get(): self.perform_store_fruit()
                         if self.auto_bait_var.get(): self.perform_bait_select()
                         self.cast()
@@ -900,87 +833,40 @@ class KarooFish:
                         if self.auto_bait_var.get(): self.perform_bait_select()
                         self.cast()
                         last_detection_time = time.time()
-                    time.sleep(0.05)
+                    time.sleep(0.01) # Short sleep when searching
                     continue
 
-                # Point 2 logic
-                point2_x = None; row_idx = point1_y - y
-                for col_idx in range(width - 1, -1, -1):
-                    b, g, r = img[row_idx, col_idx, 0:3]
-                    if r == target_color[0] and g == target_color[1] and b == target_color[2]:
-                        point2_x = x + col_idx; break
+                # We have the bar columns. Slice the image to just the bar area.
+                # Use the first and last column index found to define width
+                min_c, max_c = col_indices[0], col_indices[-1]
+                bar_img = img[:, min_c:max_c+1]
                 
-                if point2_x is None: time.sleep(0.01); continue
-
-                temp_area_width = point2_x - point1_x + 1
-                temp_x_offset = point1_x - x
-                temp_img = img[:, temp_x_offset:temp_x_offset + temp_area_width]
-
-                top_y = None
-                for r_idx in range(height):
-                    found_dark = False
-                    for c_idx in range(temp_area_width):
-                        b, g, r = temp_img[r_idx, c_idx, 0:3]
-                        if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
-                            top_y = y + r_idx; found_dark = True; break
-                    if found_dark: break
+                # 4. Find Key Components (Dark Bar & White Fish)
+                # Check rows that contain the Dark Color
+                dark_mask = np.any(np.all(bar_img == dark_color, axis=-1), axis=1)
+                dark_indices = np.where(dark_mask)[0]
                 
-                bottom_y = None
-                for r_idx in range(height - 1, -1, -1):
-                    found_dark = False
-                    for c_idx in range(temp_area_width):
-                        b, g, r = temp_img[r_idx, c_idx, 0:3]
-                        if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
-                            bottom_y = y + r_idx; found_dark = True; break
-                    if found_dark: break
+                # Check rows that contain the White Color
+                white_mask = np.any(np.all(bar_img == white_color, axis=-1), axis=1)
+                white_indices = np.where(white_mask)[0]
 
-                if top_y is None or bottom_y is None: time.sleep(0.1); continue
-
-                real_height = bottom_y - top_y + 1
-                real_img = img[top_y-y:top_y-y+real_height, temp_x_offset:temp_x_offset+temp_area_width]
-                
-                white_top_y = None
-                for r_idx in range(real_height):
-                    for c_idx in range(temp_area_width):
-                        b, g, r = real_img[r_idx, c_idx, 0:3]
-                        if r == white_color[0] and g == white_color[1] and b == white_color[2]:
-                            white_top_y = top_y + r_idx; break
-                    if white_top_y is not None: break
-
-                if white_top_y is None: continue
-
-                # PD Logic
-                dark_sections = []
-                current_section_start = None; gap_counter = 0; max_gap = (real_height * 0.2) if white_top_y else 3
-                for r_idx in range(real_height):
-                    has_dark = False
-                    for c_idx in range(temp_area_width):
-                        b, g, r = real_img[r_idx, c_idx, 0:3]
-                        if r == dark_color[0] and g == dark_color[1] and b == dark_color[2]:
-                            has_dark = True; break
-                    if has_dark:
-                        gap_counter = 0
-                        if current_section_start is None: current_section_start = top_y + r_idx
-                    else:
-                        if current_section_start is not None:
-                            gap_counter += 1
-                            if gap_counter > max_gap:
-                                section_end = top_y + r_idx - gap_counter
-                                dark_sections.append({'middle': (current_section_start + section_end) // 2, 'size': section_end - current_section_start})
-                                current_section_start = None; gap_counter = 0
-                if current_section_start is not None:
-                    section_end = top_y + real_height - 1 - gap_counter
-                    dark_sections.append({'middle': (current_section_start + section_end) // 2, 'size': section_end - current_section_start})
-
-                if dark_sections and white_top_y is not None:
+                if len(white_indices) > 0 and len(dark_indices) > 0:
                     was_detecting = True
                     last_detection_time = time.time()
-                    largest_section = max(dark_sections, key=lambda s: s['size'])
-                    raw_error = largest_section['middle'] - white_top_y
-                    normalized_error = raw_error / real_height if real_height > 0 else raw_error
+                    
+                    # Calculate Centers
+                    white_center = np.mean(white_indices)
+                    dark_center = np.mean(dark_indices) # This roughly centers on the biggest dark block
+                    
+                    # Calculate Error (Normalized by height)
+                    raw_error = dark_center - white_center
+                    normalized_error = raw_error / oh
+                    
+                    # PD Control
                     derivative = normalized_error - self.previous_error
                     self.previous_error = normalized_error
                     pd_output = (self.kp_var.get() * normalized_error) + (self.kd_var.get() * derivative)
+                    
                     time_since_cast = time.time() - self.last_cast_time
                     if pd_output > 0:
                         if time_since_cast > 3.0: 
@@ -992,7 +878,7 @@ class KarooFish:
                             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                             self.is_clicking = False
                 
-                time.sleep(0.05)
+                # NO SLEEP here. Run as fast as MSS can grab frames.
 
         except Exception as e: print(f"Error in fishing loop: {e}")
         finally:
@@ -1010,17 +896,13 @@ class KarooFish:
                     sct_img = sct.grab(sct.monitors[1])
                     img = np.array(sct_img)[:, :, :3]
                 except: time.sleep(0.1); continue
-                
                 if np.max(img) == 0: time.sleep(1.0); continue
-                
                 scaled_pt = self.get_scaled_point(p8)
                 cx, cy = int(scaled_pt[0]), int(scaled_pt[1])
-                
                 if cy < img.shape[0] and cx < img.shape[1]:
                     b, g, r = img[cy, cx]
                     if (abs(r - 179) < 35) and (abs(g - 122) < 35) and (abs(b - 0) < 35):
-                        self.click(p8, "Reroll")
-                        time.sleep(0.2)
+                        self.click(p8, "Reroll"); time.sleep(0.2)
                 time.sleep(0.1)
         except Exception as e: print(f"Error in reroll loop: {e}")
         finally: self.save_config()
