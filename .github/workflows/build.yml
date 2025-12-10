@@ -10,20 +10,23 @@ jobs:
         with:
           python-version: '3.10'
 
+      # STEP 1: Install Dependencies
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          # DXCam is required for this version
+          # DXCam is required. We also need numpy for the speed boost.
           pip install dxcam numpy keyboard pynput pywin32 Pillow requests
 
+      # STEP 2: Build
+      # We name it "KarooFishDX" (No spaces) to prevent build errors.
+      # --collect-all dxcam is REQUIRED or the exe will crash immediately.
       - name: Build with PyInstaller
-        # We name the .exe "KarooFishDX" (No spaces) to prevent command line errors
         run: pyinstaller --onefile --noconsole --uac-admin --collect-all dxcam --name KarooFishDX fishyfish.py
 
+      # STEP 3: Upload
+      # We upload the file PyInstaller just created.
       - uses: actions/upload-artifact@v4
         with:
-          # The name of the download button on GitHub
-          name: Karoo Fish - DX
-          # The path to the file PyInstaller just made (Must match the --name above)
+          name: Karoo_Fish_DX  # This is the name of the zip file on GitHub (Spaces allowed here)
           path: dist/KarooFishDX.exe
