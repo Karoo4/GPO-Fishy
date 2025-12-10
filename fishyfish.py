@@ -91,12 +91,12 @@ class KarooFish:
         self.kp = 0.15 
         self.kd = 0.5
         self.previous_error = 0
-        self.scan_timeout = 15.0 
+        self.scan_timeout = 999999.0 # Effectively Disabled
         self.rdp_click_hold = 0.05 
         
-        # TIMING TUNING (Reverted to MSS Defaults)
-        self.purchase_delay_after_key = 2.5 
-        self.clean_step_delay = 1.5 
+        # TIMING TUNING (Snappy Menus)
+        self.purchase_delay_after_key = 0.5 
+        self.clean_step_delay = 0.8 
         
         self.dpi_scale = self.get_dpi_scale()
         self.overlay_area = {
@@ -581,6 +581,7 @@ class KarooFish:
             self.afk_session_label.config(text="0"); self.last_user_activity = time.time() 
             self.fishing_status_lbl.config(text="Fishing: ON", fg="#00ff00")
             
+            # --- MAKE OVERLAY CLICK-THROUGH (TRANSPARENT TO MOUSE) ---
             if self.overlay_window: self.set_overlay_click_through(True)
             
             threading.Thread(target=self.run_fishing_loop, daemon=True).start()
@@ -590,6 +591,7 @@ class KarooFish:
             win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
             self.record_session()
             
+            # --- MAKE OVERLAY SOLID (MOVABLE) ---
             if self.overlay_window: self.set_overlay_click_through(False)
 
     def toggle_reroll(self):
@@ -733,7 +735,7 @@ class KarooFish:
 
     def cast(self):
         """
-        RESTORED MSS TIMING
+        RESTORED MSS TIMING (Brilliant Casts + Safe Wait)
         """
         if self.is_performing_action: return 
         self.move_to(self.point_coords[4])
@@ -773,7 +775,9 @@ class KarooFish:
         if self.auto_purchase_var.get(): self.perform_auto_purchase_sequence()
         self.cast()
         
-        last_detection_time = time.time()
+        # We start looking for the bite immediately after the cast finishes its sleep.
+        # last_detection_time is only relevant for timeouts, which we have disabled.
+        
         was_detecting = False
 
         try:
@@ -814,14 +818,15 @@ class KarooFish:
                 
                 found_first = len(col_indices) > 0
 
-                # === MSS LOGIC RESTORED ===
+                # === LOGIC ===
                 if not found_first:
-                    current_time = time.time()
-                    if was_detecting: # Caught
+                    # BARS NOT FOUND
+                    if was_detecting: # We were just playing! Minigame Finished.
                         was_detecting = False
                         self.is_clicking = False
                         win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
                         
+                        # Handle Logic
                         if self.auto_purchase_var.get():
                             self.purchase_counter += 1
                             if self.purchase_counter >= self.loops_var.get():
@@ -829,20 +834,18 @@ class KarooFish:
                         if self.item_check_var.get(): self.perform_store_fruit()
                         if self.auto_bait_var.get(): self.perform_bait_select()
                         
-                        # 3. NO EXTRA DELAY - Logic falls through to cast immediately (which handles its own delays)
+                        # CAST AGAIN (This handles the cooldown)
                         self.cast()
-                        last_detection_time = time.time()
                         
-                    elif current_time - last_detection_time > self.scan_timeout: # Timeout
-                        if self.item_check_var.get(): self.perform_store_fruit()
-                        if self.auto_bait_var.get(): self.perform_bait_select()
-                        
-                        self.cast()
-                        last_detection_time = time.time()
+                    else:
+                        # Waiting phase...
+                        # NO TIMEOUT LOGIC HERE. JUST WAIT INDEFINITELY.
+                        # This means if no bars are found, we just loop around.
+                        pass
                     
                     continue
 
-                # Bar Found
+                # Bar Found (Minigame Active)
                 min_c, max_c = col_indices[0], col_indices[-1]
                 bar_img = img[:, min_c:max_c+1]
                 
@@ -854,7 +857,6 @@ class KarooFish:
 
                 if len(white_indices) > 0 and len(dark_indices) > 0:
                     was_detecting = True
-                    last_detection_time = time.time()
                     
                     white_center = np.mean(white_indices)
                     dark_center = np.mean(dark_indices)
